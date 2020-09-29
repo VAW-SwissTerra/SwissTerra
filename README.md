@@ -1,4 +1,4 @@
-# terra --- SwissTerra archival image processing
+# terra — SwissTerra archival image processing
 
 ## Installation
 Installation through conda is currently the only supported method.
@@ -20,7 +20,7 @@ to allow modification of the source code in place.
 Also make sure to set up the `agisoft_LICENSE` environment variable to point to `metashape.lic` in the Metashape installation folder.
 
 ### Data
-The data should either be in a folder/symlink called `input/` in the working directory, or be defined by the environment variable `SWISSTERRA\_INPUT\_DIR` (which takes precedence).
+The data should either be in a folder/symlink called `input/` in the working directory, or be defined by the environment variable `SWISSTERRA_INPUT_DIR` (which takes precedence).
 
 Run `terra data check` to validate that all files can be located.
 

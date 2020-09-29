@@ -16,21 +16,31 @@ def parse_args():
 
     cache_parser = commands.add_parser("cache")
     cache_parser.add_argument("action", choices=["clear", "list"])
-    cache_parser.set_defaults(func=cache)
+    cache_parser.set_defaults(func=cache_commands)
+
+    files_parser = commands.add_parser("files")
+    files_parser.add_argument("action", choices=["check"])
+    files_parser.set_defaults(func=files_commands)
 
     overview_parser = commands.add_parser("overview")
-    overview_parser.set_defaults(func=overview)
+    overview_parser.set_defaults(func=overview_commands)
 
     return parser.parse_args()
 
 
-def overview(args):
+def overview_commands(args):
     print("Overview!")
 
 
-def cache(args):
+def cache_commands(args):
 
     if args.action == "clear":
         files.clear_cache()
     elif args.action == "list":
         files.list_cache()
+
+
+def files_commands(args):
+
+    if args.action == "check":
+        files.check_data()

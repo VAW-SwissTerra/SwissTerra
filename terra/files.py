@@ -20,7 +20,7 @@ INPUT_DIRECTORIES = {
 
 INPUT_FILES = {
     "manual_fiducials": "fiducials/Rhone_ManualFiducials_200909.csv",
-    "sgi_1973": "shapefiles/sgi_1973.shp",
+    "sgi_1973": "shapefiles/SGI_1973.shp",
     "outlines_1973": "shapefiles/Glacierarea_1935_split.shp",
     "viewsheds": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp"
 }
@@ -35,7 +35,7 @@ INPUT_FILE_TYPES = {
     "outlines_1973": "ESRI Shapefile",
     "viewsheds": "ESRI Shapefile",
     "image_dir": "TIFF image",
-    "image_meta_dir": "UTF-8 Unicode text"
+    "image_meta_dir": "text"
 }
 
 
@@ -59,22 +59,47 @@ def list_cache():
 
 def check_data():
 
+    max_entries = 50
     invalid_files = []
-    InvalidFile = namedtuple("File", ["filepath", "expected_filetype", "actual_filetype"])
-
-    print("Checking filetypes for each input file")
-    for key in INPUT_FILES:
-        estimated_filetype = magic.from_file(INPUT_FILES[key])
-        valid = INPUT_FILE_TYPES[key] in estimated_filetype
-        if not valid:
-            invalid_files.append(InvalidFile(INPUT_FILES[key], INPUT_FILE_TYPES[key], estimated_filetype))
+    missing_files = []
+    MissingData = namedtuple("MissingData", ["filepath", "entry_type"])
+    InvalidData = namedtuple("InvalidData", ["filepath", "expected_filetype", "actual_filetype"])
 
     # TODO: Maybe make this recursive and not just in one level
-    for directory in INPUT_DIRECTORIES:
+    for key, directory in INPUT_DIRECTORIES.items():
+        if (len(invalid_files) + len(missing_files)) > max_entries:
+            break
+        if not os.path.isdir(directory):
+            missing_files.append(MissingData(directory, "directory"))
         for filename in os.listdir(directory):
             full_path = os.path.join(directory, filename)
             estimated_filetype = magic.from_file(full_path)
 
-            valid = INPUT_FILE_TYPES[directory] in estimated_filetype
+            valid = INPUT_FILE_TYPES[key] in estimated_filetype
             if not valid:
-                invalid_files.append(InvalidFile(full_path, INPUT_FILE_TYPES[directory], estimated_filetype))
+                invalid_files.append(InvalidData(full_path, INPUT_FILE_TYPES[key], estimated_filetype))
+
+    print("Checking filetypes for each input file")
+    for key in INPUT_FILES:
+        if (len(invalid_files) + len(missing_files)) > max_entries:
+            break
+        if not os.path.isfile(INPUT_FILES[key]):
+            missing_files.append(MissingData(INPUT_FILES[key], "file"))
+        estimated_filetype = magic.from_file(INPUT_FILES[key])
+        valid = INPUT_FILE_TYPES[key] in estimated_filetype
+        if not valid:
+            invalid_files.append(InvalidData(INPUT_FILES[key], INPUT_FILE_TYPES[key], estimated_filetype))
+
+    if len(invalid_files) == 0 and len(missing_files) == 0:
+        print("All files and directories found")
+        return
+
+    if (len(invalid_files) + len(missing_files)) == max_entries:
+        print(f"Reached the maximum amount of incorrect entries. Printing the first {max_entries}.")
+
+    for missing_data in missing_files:
+        print(f"{missing_data.entry_type.capitalize()} {missing_data.filepath} not found")
+
+    for invalid_file in invalid_files:
+        print("File {} has an expected type of {} but has {}".format(
+            invalid_file.filepath, invalid_file.expected_filetype, invalid_file.actual_filetype))
