@@ -5,10 +5,7 @@ Installation through conda is currently the only supported method.
 
 ```bash
 # This will create an environment called swissterra and download all the packages
-conda create --file environment.yml
-
-# Install Metashape
-pip install http://download.agisoft.com/Metashape-1.6.4-cp35.cp36.cp37-abi3-linux_x86_64.whl
+conda env create --file environment.yml
 ```
 then
 ```bash
