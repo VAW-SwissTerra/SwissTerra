@@ -1,5 +1,7 @@
 import argparse
 
+from . import files
+
 
 def main():
     args = parse_args()
@@ -12,6 +14,10 @@ def parse_args():
     commands = parser.add_subparsers(dest="commands")
     commands.required = True
 
+    cache_parser = commands.add_parser("cache")
+    cache_parser.add_argument("action", choices=["clear", "list"])
+    cache_parser.set_defaults(func=cache)
+
     overview_parser = commands.add_parser("overview")
     overview_parser.set_defaults(func=overview)
 
@@ -20,3 +26,11 @@ def parse_args():
 
 def overview(args):
     print("Overview!")
+
+
+def cache(args):
+
+    if args.action == "clear":
+        files.clear_cache()
+    elif args.action == "list":
+        files.list_cache()

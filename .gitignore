@@ -1,3 +1,5 @@
 input/
 terra.egg-info/
 *__pycache*
+.vim/
+temp/

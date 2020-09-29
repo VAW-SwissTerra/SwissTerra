@@ -249,7 +249,7 @@ class FrameMatcher:
         return image
 
     @staticmethod
-    #@statictypes.enforce
+    # @statictypes.enforce
     def transform_image(image: np.ndarray,
                         transform: skimage.transform.EuclideanTransform,
                         output_shape: Tuple[int, int]) -> np.ndarray:
@@ -351,6 +351,7 @@ class FrameMatcher:
         if self.progress_bar is not None:
             self.progress_bar.update(1)
         return transform
+
     @statictypes.enforce
     def get_orb_transforms(self) -> Dict[str, skimage.transform.EuclideanTransform]:
         """
@@ -609,7 +610,7 @@ class FrameMatcher:
 
     # @statictypes.enforce TODO: Fix the statictypes bug
     def merge_transforms(self, transforms_list: List[Dict[str, skimage.transform.EuclideanTransform]]
-                        ) -> Dict[str, skimage.transform.EuclideanTransform]:
+                         ) -> Dict[str, skimage.transform.EuclideanTransform]:
         """
         Get the resultant transform from applying each transform in the order given by the input list.
 
@@ -758,7 +759,6 @@ class FrameMatcher:
         if self.cache:
             self.save_transforms("merged_transforms.pkl", merged_transforms)
 
-
         if self.verbose:
             orb_error = self.evaluate_transforms(orb_transforms)
             merged_error = self.evaluate_transforms(merged_transforms)
@@ -859,8 +859,6 @@ def generate_fiducial_animation(image_folder="temp/template_corrected", output="
     # Use ffmpeg to encode an easy to watch mp4
     subprocess.run(f"ffmpeg -framerate 10 -i temp/frames/frame_%00d.jpg -c:v libx264 " +
                    "-profile:v high -crf 20 -pix_fmt yuv420p {output} -y", shell=True)
-
-
 
 
 if __name__ == "__main__":
