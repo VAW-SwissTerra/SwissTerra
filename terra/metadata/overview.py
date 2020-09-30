@@ -13,14 +13,16 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-# Input files
-SGI_TOPOMAP_MERGED = "input/GlacierArea_SGI_Merged.shp"  # Merged SGI and ~1930s topographic map outlines. This contains no metadata
-SGI_OUTLINES = "input/SGI_1973.shp"  # Not currently used since it doesn't cover early 1900s glacier extents.
-VIEWSHEDS = "input/V_TERRA_BGDI.shp"
-CAMERA_LOCATIONS = "input/V_TERRA_VIEWSHED_PARAMS.shp"
+from terra import files
 
 # Temporary files
-CAMERA_LOCATIONS_CACHE_FILE = "temp/camera_glacier_coverage.pkl"
+TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "overview")
+if not os.path.isdir(TEMP_DIRECTORY):
+    os.makedirs(TEMP_DIRECTORY, exist_ok=True)
+
+CACHE_FILES = {
+    "camera_glacier_coverage": os.path.join(TEMP_DIRECTORY, "camera_glacier_coverage.pkl"),
+}
 
 
 def get_camera_glacier_viewshed_and_distances() -> gpd.GeoDataFrame:
@@ -33,20 +35,21 @@ def get_camera_glacier_viewshed_and_distances() -> gpd.GeoDataFrame:
     """
     # Read SGI glacier polygons and convert its coordinate system to the same as the others
     print("Loading glacier outlines")
-    glaciers = gpd.read_file(SGI_TOPOMAP_MERGED).to_crs("EPSG:21781")
+    glaciers = gpd.read_file(files.INPUT_FILES["sgi_1973"]).to_crs("EPSG:21781")
     # Read camera viewsheds
     print("Loading camera viewsheds")
-    viewsheds = gpd.read_file(VIEWSHEDS)
+    viewsheds = gpd.read_file(files.INPUT_FILES["viewsheds"])
     # Read the location of the images
     print("Loading camera locations")
-    camera_locations = gpd.read_file(CAMERA_LOCATIONS)
-
+    camera_locations = gpd.read_file(files.INPUT_FILES["camera_locations"])
 
     # Loop through each glacier and add its distance to each glacier in separate columns
     # Cameras without a viewshed that intersects the glacier will be set to NaN
+    # TODO: Make this multithreaded
     print("Measuring distances and checking viewsheds to glaciers for all images")
     for i, glacier in tqdm(glaciers.iterrows(), total=len(glaciers)):
-        glacier_code = f"glacier_{glacier['id']}" # This is used as the column name
+        # glacier_code = f"glacier_{glacier['id']"  # This is used as the column name
+        glacier_code = glacier["SGI"]
         # Measure the camera distances to the glacier and round to nearest metre (just to keep file size down a bit)
         camera_locations[glacier_code] = np.round(camera_locations.distance(glacier.geometry))
         # Calculate which viewsheds overlaps with the glacier
@@ -54,11 +57,12 @@ def get_camera_glacier_viewshed_and_distances() -> gpd.GeoDataFrame:
         # Get the INVENTORY_NUMBER values from each viewshed that overlaps with the glacier
         overlapping_viewshed_inventory_numbers = viewsheds.loc[overlap.index]["INVENTORY_"].values
         # Extract the cameras that do NOT have an overlapping viewshed, and set their distance to NaN
-        camera_locations.loc[~camera_locations["INVENTORY_"].isin(overlapping_viewshed_inventory_numbers), glacier_code] = np.nan
+        camera_locations.loc[~camera_locations["INVENTORY_"].isin(
+            overlapping_viewshed_inventory_numbers), glacier_code] = np.nan
 
     print("Finished. Saving...")
     # Save the file as a temporary cache
-    camera_locations.to_pickle(CAMERA_LOCATIONS_CACHE_FILE)
+    camera_locations.to_pickle(CACHE_FILES["camera_glacier_coverage"])
     return camera_locations
 
 
@@ -91,7 +95,7 @@ def extract_largest_glaciers(camera_locations, area_fraction=0.8):
     return: camera_locations: With the exact same shape as the input, only with more NaNs!
     """
     # Read the SGI outlines and convert the coordinate system to the one used by the other data
-    glaciers = gpd.read_file(SGI_OUTLINES).to_crs("EPSG:21781")
+    glaciers = gpd.read_file(files.INPUT_FILES["sgi_1973"]).to_crs("EPSG:21781")
     # Sort the values by area (largest first)
     glaciers.sort_values("Shape_Area", ascending=False, inplace=True)
 
@@ -111,17 +115,19 @@ def extract_largest_glaciers(camera_locations, area_fraction=0.8):
 
 def main(cache: bool = True, max_distance: float = 2500.0, area_fraction: float = 0.8) -> None:
     # Read from the cache (if wanted and if it exists) or start from scratch
-    camera_locations = gpd.GeoDataFrame(pd.read_pickle(CAMERA_LOCATIONS_CACHE_FILE) if cache and
-                                        os.path.isfile(CAMERA_LOCATIONS_CACHE_FILE) else
-                                        get_camera_glacier_viewshed_and_distances())
-    # Take only the largest glaciers (temporarily removed since it doesn't work with merged SGI/topomap outlines)
-    #camera_locations = extract_largest_glaciers(camera_locations)
+    if os.path.isfile(CACHE_FILES["camera_glacier_coverage"]) and cache:
+        print("Reading cached glacier viewshed coverage")
+        camera_locations = gpd.GeoDataFrame(pd.read_pickle(CACHE_FILES["camera_glacier_coverage"]))
+    else:
+        print("Generating new glacier viewshed coverage map")
+        camera_locations = get_camera_glacier_viewshed_and_distances()
+
     # And only the ones that are relatively close
+    print(f"Thresholding the camera distances to {max_distance} m")
     camera_locations = threshold_camera_distance(camera_locations, max_distance=max_distance)
     # Remove all photographs that (after filtering) do not portray a single glacier
     camera_locations = camera_locations[camera_locations.iloc[:, 24:].any(axis=1)]
     #camera_locations["V_TERRA_13"].to_csv("temp/swissterra_order_20200907.txt", index=False, header=None)
-    print(camera_locations)
     return camera_locations
 
 
@@ -133,8 +139,8 @@ def get_glacier_area_camera_count_relation(cache=True):
     Prints the relationship and saves it to a temporary file.
     """
     # Read the camera_locations either from the cache or from the function
-    camera_locations = gpd.GeoDataFrame(pd.read_pickle(CAMERA_LOCATIONS_CACHE_FILE) if cache and
-                                        os.path.isfile(CAMERA_LOCATIONS_CACHE_FILE) else
+    camera_locations = gpd.GeoDataFrame(pd.read_pickle(CACHE_FILES["camera_glacier_coverage"]) if cache and
+                                        os.path.isfile(CACHE_FILES["camera_glacier_coverage"]) else
                                         get_camera_glacier_viewshed_and_distances())
     # Set the "far away" glacier distances to NaN
     camera_locations = threshold_camera_distance(camera_locations)
@@ -152,7 +158,7 @@ def get_glacier_area_camera_count_relation(cache=True):
         number_of_cameras = cameras_within_fraction.shape[0]
 
         # Put the result in the output file
-        relation[fraction] =  number_of_cameras
+        relation[fraction] = number_of_cameras
 
     print(relation)
     relation.to_csv("temp/relation_area_image_count.csv")
@@ -160,9 +166,8 @@ def get_glacier_area_camera_count_relation(cache=True):
 
 def get_select_viewsheds():
     camera_locations = main()
-    viewsheds = gpd.read_file(VIEWSHEDS)
+    viewsheds = gpd.read_file(files.INPUT_FILES["viewsheds"])
     relevant_viewsheds = viewsheds[viewsheds["IMAGE_UUID"].isin(camera_locations["IMAGE_UUID"].values)]
-    print(relevant_viewsheds)
     relevant_viewsheds.to_file("temp/relevant_viewsheds.shp")
 
 
@@ -170,20 +175,19 @@ def get_capture_date_distribution():
     camera_locations = main()
     year_column = "V_TERRA_11"
     years = camera_locations[year_column].astype(int).values
-    print(np.unique(years))
 
     plt.hist(years, bins=np.max(years) - np.min(years), rwidth=0.9, color="k", zorder=2)
     plt.ylabel("Number of photographs")
     plt.xlabel("Year")
     plt.grid(zorder=3, linewidth=1)
     plt.show()
-    #print(camera_locations[year_column])
+    # print(camera_locations[year_column])
 
 
 if __name__ == "__main__":
-    #main(cache=True)
-    #get_camera_glacier_viewshed_and_distances_dissolved()
+    # main(cache=True)
+    # get_camera_glacier_viewshed_and_distances_dissolved()
     get_select_viewsheds()
-    #get_glacier_area_camera_count_relation()
+    # get_glacier_area_camera_count_relation()
 
 # TODO: Get the new RGI/topomap better integrated with the script. Currently, some functions are completely broken!

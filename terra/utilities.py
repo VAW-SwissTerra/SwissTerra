@@ -1,17 +1,17 @@
 """Python or C-related utility functions."""
-from contextlib import contextmanager
 import ctypes
 import io
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 
 libc = ctypes.CDLL(None)
 c_stdout = ctypes.c_void_p.in_dll(libc, 'stdout')
 
 
 @contextmanager
-def stdout_redirector(stream=None):
+def no_stdout(stream=None):
     """
     Redirect the stdout to a stream file.
 
