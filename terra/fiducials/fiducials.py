@@ -18,9 +18,17 @@ import skimage.transform
 import statictypes
 from tqdm import tqdm
 
+from terra import files
+
+TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "fiducials")
+
+CACHE_FILES = {
+
+}
+
 
 @statictypes.enforce
-def get_reference_fiducials(file_path: str = "input/Rhone_ManualFiducials_200909.csv") -> pd.DataFrame:
+def get_reference_fiducials(file_path: str = files.INPUT_FILES["manual_fiducials"]) -> pd.DataFrame:
     """
     Read reference fiducial placements from an exported Metashape file.
 
@@ -135,7 +143,7 @@ def find_frame_luminance_threshold(img: np.ndarray) -> int:
 class FrameMatcher:
     """Class to train and run image frame matching and correction."""
 
-    def __init__(self, image_folder: str, orb_reference_filename: str, frame_luminance_extra: int = 30,
+    def __init__(self, image_folder: str = files.INPUT_DIRECTORIES["image_dir"], orb_reference_filename: str = "000-175-212.tif", frame_luminance_extra: int = 30,
                  max_orb_features: int = 6000, orb_patch_size: int = 100, max_image_offset: float = 300.0,
                  ransac_reprojection_threshold: float = 8.0, ransac_min_samples: int = 100,
                  ransac_max_trials: int = 1000, template_size: int = 500, max_template_diff: int = 10,
@@ -206,10 +214,13 @@ class FrameMatcher:
         self.reference_descriptors: Optional[np.ndarray] = None
 
         # Make temporary folder paths
-        self.temp_folder = "temp"
+        self.temp_folder = TEMP_DIRECTORY
         self.fiducial_template_folder = os.path.join(self.temp_folder, "fiducial_templates")
         self.transform_folder = os.path.join(self.temp_folder, "transforms")
         self.transformed_image_folder = os.path.join(self.temp_folder, "transformed_images")
+
+        for folder in [self.fiducial_template_folder, self.transform_folder, self.transformed_image_folder]:
+            os.makedirs(folder, exist_ok=True)
 
         # The approximate coordinates of the fiducial centres after homogenisation transform (in y,x format)
         self.fiducial_locations = {
@@ -229,6 +240,8 @@ class FrameMatcher:
         self.ransac_max_trials = ransac_max_trials
         self.max_template_diff = max_template_diff
         self.progress_bar: Optional[tqdm] = None
+        # Allow only approximately 16 Gb of files to be open at once
+        self.max_open_files = 16
 
         # If multiple transformations are made in order, this is the latest valid one
         self.latest_transforms: Optional[Dict[str, skimage.transform.EuclideanTransform]] = None
@@ -429,9 +442,11 @@ class FrameMatcher:
 
         return fiducial.astype(np.uint8)
 
-    @statictypes.enforce
-    def extract_all_fiducials(self, filename: str) -> List[np.ndarray]:
+    # @statictypes.enforce
+    def extract_all_fiducials(self, filename: str) -> Optional[List[np.ndarray]]:
         image = self.read_image(filename)
+        if filename not in self.manual_transforms.keys():
+            return None
         transformed_image = self.transform_image(image=image, transform=self.manual_transforms[filename].inverse,
                                                  output_shape=self.reference_frame.shape)
         fiducials = []
@@ -465,11 +480,13 @@ class FrameMatcher:
 
         # Extract all fiducials from every image using multithreading
         with tqdm(total=len(self.filenames), disable=(not self.verbose)) as self.progress_bar:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_open_files) as executor:
                 results = executor.map(self.extract_all_fiducials, self.filenames)
 
         # Sort the results by corner
         for image_fiducials in results:
+            if image_fiducials is None:
+                continue
             for i, corner in enumerate(fiducials.keys()):
                 fiducials[corner].append(image_fiducials[i])
 
@@ -598,7 +615,7 @@ class FrameMatcher:
 
         # Loop over all images and extract transforms based on feature matching
         with tqdm(total=len(self.filenames), disable=(not self.verbose)) as self.progress_bar:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_open_files) as executor:
                 results = executor.map(self.get_template_transform, self.filenames)
 
         transforms = dict(zip(self.filenames, results))
@@ -659,6 +676,8 @@ class FrameMatcher:
         rmses = []
         for filename, transform in transforms.items():
             # Transform the (approximate) fiducial coordinates manually
+            if filename not in self.manual_transforms.keys():
+                continue
             manually_transformed_coords = self.manual_transforms[filename](source_coords)
             # Transform the (approximate) fiducial coordinates with the given transform
             transformed_coords = transform.inverse(source_coords)
@@ -770,7 +789,7 @@ class FrameMatcher:
                   """)
 
     @statictypes.enforce
-    def transform_images(self, transforms_file: str = "merged_transforms.pkl", output_format="jpg") -> None:
+    def transform_images(self, transforms_file: str = "merged_transforms.pkl", output_format: str = "jpg") -> None:
         """
         Transform all images using the provided (cached) transforms file.
 
@@ -812,19 +831,20 @@ class FrameMatcher:
             shutil.rmtree(folder)
 
 
-def generate_fiducial_animation(image_folder="temp/template_corrected", output="temp/fiducial_template_corr_animation.mp4"):
+def generate_fiducial_animation(image_folder=os.path.join(TEMP_DIRECTORY, "template_corrected"), output=os.path.join(TEMP_DIRECTORY, "fiducial_template_corr_animation.mp4")):
     """
     Animate the top fiducial location by rapidly switching between rectified images.
     """
 
-    FIDUCIAL_COORDS = FrameMatcher("input/images/", "000-175-212.tif").fiducial_locations
+    fiducial_coords = FrameMatcher().fiducial_locations
     # Make frame directory if necessary
-    if not os.path.isdir("temp/frames"):
-        os.makedirs("temp/frames")
+    frame_temp_folder = os.path.join(TEMP_DIRECTORY, "frames")
+    if not os.path.isdir(frame_temp_folder):
+        os.makedirs(frame_temp_folder)
 
     window_size = 500
 
-    fiducials = {key: [] for key in FIDUCIAL_COORDS.keys()}
+    fiducials = {key: [] for key in fiducial_coords.keys()}
 
     mean_fiducials = []
     # Go over each file, extract the fiducial, normalise the zero exposure value, then export the frame
@@ -832,9 +852,9 @@ def generate_fiducial_animation(image_folder="temp/template_corrected", output="
         all_fiducials = np.empty((window_size * 2, window_size * 2), dtype=np.uint8)
         img = cv2.imread(os.path.join(image_folder, file), cv2.IMREAD_GRAYSCALE)
 
-        for corner in FIDUCIAL_COORDS.keys():
+        for corner in fiducial_coords.keys():
             # Extract the fiducial
-            y_center, x_center = FIDUCIAL_COORDS[corner]
+            y_center, x_center = fiducial_coords[corner]
             top = y_center - window_size // 2
             bottom = y_center + window_size // 2
             left = x_center - window_size // 2
@@ -854,15 +874,17 @@ def generate_fiducial_animation(image_folder="temp/template_corrected", output="
                 all_fiducials[:window_size, window_size:] = fiducial
             else:
                 all_fiducials[window_size:, window_size:] = fiducial
-        cv2.imwrite(f"temp/frames/frame_{i + 1}.jpg", all_fiducials)
+        cv2.imwrite(os.path.join(frame_temp_folder, f"frame_{i + 1}.jpg"), all_fiducials)
 
     # Use ffmpeg to encode an easy to watch mp4
-    subprocess.run(f"ffmpeg -framerate 10 -i temp/frames/frame_%00d.jpg -c:v libx264 " +
+    subprocess.run(f"ffmpeg -framerate 10 -i {frame_temp_folder}/frame_%00d.jpg -c:v libx264 " +
                    "-profile:v high -crf 20 -pix_fmt yuv420p {output} -y", shell=True)
+
+    return output
 
 
 if __name__ == "__main__":
-    matcher = FrameMatcher("input/images/", "000-175-212.tif", cache=True)
+    matcher = FrameMatcher(cache=True)
     #matcher.filenames = matcher.filenames[:2]
     matcher.clear_cache()
     matcher.train()

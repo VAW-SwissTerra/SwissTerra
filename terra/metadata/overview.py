@@ -45,7 +45,7 @@ def get_camera_glacier_viewshed_and_distances() -> gpd.GeoDataFrame:
 
     # Loop through each glacier and add its distance to each glacier in separate columns
     # Cameras without a viewshed that intersects the glacier will be set to NaN
-    # TODO: Make this multithreaded
+    # TODO: Make this multithreaded?
     print("Measuring distances and checking viewsheds to glaciers for all images")
     for i, glacier in tqdm(glaciers.iterrows(), total=len(glaciers)):
         # glacier_code = f"glacier_{glacier['id']"  # This is used as the column name
@@ -131,7 +131,6 @@ def main(cache: bool = True, max_distance: float = 2500.0, area_fraction: float 
     return camera_locations
 
 
-# TODO: Fix this to work with the new merged SGI/topomap files
 def get_glacier_area_camera_count_relation(cache=True):
     """
     Figure out the relationship between the X% largest glaciers (by cumulative area) and how many images are needed to cover them.
@@ -189,5 +188,3 @@ if __name__ == "__main__":
     # get_camera_glacier_viewshed_and_distances_dissolved()
     get_select_viewsheds()
     # get_glacier_area_camera_count_relation()
-
-# TODO: Get the new RGI/topomap better integrated with the script. Currently, some functions are completely broken!
