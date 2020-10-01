@@ -27,6 +27,10 @@ CACHE_FILES = {
 }
 
 
+# TODO: Add the reference image transform to the resultant merged_transforms.pkl
+# TODO: Populate the CACHE_FILES dictionary
+
+
 @statictypes.enforce
 def get_reference_fiducials(file_path: str = files.INPUT_FILES["manual_fiducials"]) -> pd.DataFrame:
     """
@@ -556,7 +560,7 @@ class FrameMatcher:
 
         # Loop over all corners (corner == fiducial right now) individually
         for i, corner in enumerate(self.fiducial_locations.keys()):
-            #x_center, y_center = source_coords[i, :].astype(int)
+            # x_center, y_center = source_coords[i, :].astype(int)
             y_center, x_center = self.fiducial_locations[corner]
             fiducial_template_sized = self.extract_fiducial(image=image,
                                                             x_center=x_center,
@@ -808,17 +812,19 @@ class FrameMatcher:
         if self.verbose:
             print("Transforming and saving images")
 
-        for filename in tqdm(self.filenames, disable=(not self.verbose)):
-            # Skip if the filename is not in the dictionary (usually the ORB reference image)
-            if filename not in transforms:
-                continue
+        def apply_transform(filename):
             # Transform the image using the provided transforms
             transformed_image = self.transform_image(self.read_image(filename),
-                                                     transforms[filename].inverse,
+                                                     transforms[filename],
                                                      self.reference_frame.shape)
             cv2.imwrite(os.path.join(self.transformed_image_folder,
                                      filename.replace(".tif", f".{output_format}")),
                         transformed_image)
+            self.progress_bar.update()
+
+        with tqdm(total=len(transforms.keys()), disable=(not self.verbose)) as self.progress_bar:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_open_files) as executor:
+                executor.map(apply_transform, transforms.keys())
 
     def clear_cache(self):
         """Remove the folders corresponding to cached results."""
@@ -831,12 +837,13 @@ class FrameMatcher:
             shutil.rmtree(folder)
 
 
-def generate_fiducial_animation(image_folder=os.path.join(TEMP_DIRECTORY, "template_corrected"), output=os.path.join(TEMP_DIRECTORY, "fiducial_template_corr_animation.mp4")):
+def generate_fiducial_animation(output=os.path.join(TEMP_DIRECTORY, "fiducial_template_corr_animation.mp4")):
     """
     Animate the top fiducial location by rapidly switching between rectified images.
     """
-
-    fiducial_coords = FrameMatcher().fiducial_locations
+    matcher = FrameMatcher()
+    fiducial_coords = matcher.fiducial_locations
+    image_folder = matcher.transformed_image_folder
     # Make frame directory if necessary
     frame_temp_folder = os.path.join(TEMP_DIRECTORY, "frames")
     if not os.path.isdir(frame_temp_folder):
@@ -847,10 +854,16 @@ def generate_fiducial_animation(image_folder=os.path.join(TEMP_DIRECTORY, "templ
     fiducials = {key: [] for key in fiducial_coords.keys()}
 
     mean_fiducials = []
-    # Go over each file, extract the fiducial, normalise the zero exposure value, then export the frame
-    for i, file in enumerate(tqdm(os.listdir(image_folder))):
+    progress_bar: Optional[tqdm] = None
+
+    filenames = [os.path.join(image_folder, filename) for filename in os.listdir(image_folder)]
+
+    def extract_fiducials(filename):
         all_fiducials = np.empty((window_size * 2, window_size * 2), dtype=np.uint8)
-        img = cv2.imread(os.path.join(image_folder, file), cv2.IMREAD_GRAYSCALE)
+        img = cv2.imread(filename, cv2.IMREAD_GRAYSCALE)
+
+        if img is None:
+            raise ValueError(f"File {filename} returned None on cv2.imread")
 
         for corner in fiducial_coords.keys():
             # Extract the fiducial
@@ -874,17 +887,55 @@ def generate_fiducial_animation(image_folder=os.path.join(TEMP_DIRECTORY, "templ
                 all_fiducials[:window_size, window_size:] = fiducial
             else:
                 all_fiducials[window_size:, window_size:] = fiducial
-        cv2.imwrite(os.path.join(frame_temp_folder, f"frame_{i + 1}.jpg"), all_fiducials)
+
+        i = filenames.index(filename)
+        cv2.imwrite(os.path.join(frame_temp_folder, f"frame_{i}.jpg"), all_fiducials)
+
+        progress_bar.update()
+
+    with tqdm(total=len(filenames)) as progress_bar:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            executor.map(extract_fiducials, filenames)
+
+    if False:
+        # Go over each file, extract the fiducial, normalise the zero exposure value, then export the frame
+        for i, file in enumerate(tqdm(os.listdir(image_folder))):
+            all_fiducials = np.empty((window_size * 2, window_size * 2), dtype=np.uint8)
+            img = cv2.imread(os.path.join(image_folder, file), cv2.IMREAD_GRAYSCALE)
+
+            for corner in fiducial_coords.keys():
+                # Extract the fiducial
+                y_center, x_center = fiducial_coords[corner]
+                top = y_center - window_size // 2
+                bottom = y_center + window_size // 2
+                left = x_center - window_size // 2
+                right = x_center + window_size // 2
+
+                fiducial = img[top:bottom, left:right].astype(np.int32)
+                # Set the luminance of the frame as zero
+                fiducial -= find_frame_luminance_threshold(fiducial)
+                # Fix negative values
+                fiducial[fiducial < 0] = 0
+                fiducials[corner].append(fiducial)
+                if corner == "top":
+                    all_fiducials[:window_size, :window_size] = fiducial
+                elif corner == "left":
+                    all_fiducials[window_size:, :window_size] = fiducial
+                elif corner == "right":
+                    all_fiducials[:window_size, window_size:] = fiducial
+                else:
+                    all_fiducials[window_size:, window_size:] = fiducial
+            cv2.imwrite(os.path.join(frame_temp_folder, f"frame_{i + 1}.jpg"), all_fiducials)
 
     # Use ffmpeg to encode an easy to watch mp4
-    subprocess.run(f"ffmpeg -framerate 10 -i {frame_temp_folder}/frame_%00d.jpg -c:v libx264 " +
-                   "-profile:v high -crf 20 -pix_fmt yuv420p {output} -y", shell=True)
+    subprocess.run(f"ffmpeg -framerate 10 -i {frame_temp_folder}/frame_%000d.jpg -c:v libx264 " +
+                   f"-profile:v high -crf 20 -pix_fmt yuv420p {output} -y", check=True, shell=True)
 
     return output
 
 
 if __name__ == "__main__":
     matcher = FrameMatcher(cache=True)
-    #matcher.filenames = matcher.filenames[:2]
+    # matcher.filenames = matcher.filenames[:2]
     matcher.clear_cache()
     matcher.train()

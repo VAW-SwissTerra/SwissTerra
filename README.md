@@ -25,7 +25,6 @@
 	source ~/.bashrc
 	```
 
-	to allow modification of the source code in place.
 	Make sure that the correct conda environment is activated before running this step.
 
 3. 	Make sure to set up the `agisoft_LICENSE` environment variable to point to `metashape.lic` in the Metashape installation folder.

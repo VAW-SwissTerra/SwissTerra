@@ -1,7 +1,9 @@
+#!/usr/bin/env python
 import argparse
+import os
 import subprocess
 
-from terra import fiducials, files, metadata
+from terra import fiducials, files, metadata, preprocessing
 
 
 def main():
@@ -62,14 +64,21 @@ def parse_args():
     metadata_parser.set_defaults(func=metadata_commands)
 
     # Preprocessing data
-    preprocessing_parser = commands.add_parser("preprocess", help="WIP")
-    preprocessing_parser.add_argument("action")
+    choices = {
+        "generate-masks": "Generate frame masks for each image with an estimated frame transform.",
+        "show-reference-mask": "Show the generated reference mask.",
+    }
+    preprocessing_parser = commands.add_parser(
+        "preprocessing", help="WIP", formatter_class=argparse.RawTextHelpFormatter)
+    preprocessing_parser.add_argument("action", help=generate_help_text(choices),
+                                      metavar="action", choices=choices.keys())
     preprocessing_parser.set_defaults(func=preprocessing_commands)
 
     # Fiducial marker handling
     choices = {
         "train": "Train the fiducial matcher with manually picked references",
-        "animate": "Animate the automated fiducial matches."
+        "animate": "Animate the automated fiducial matches.",
+        "transform": "Apply the estimated trasnforms to the images and save them."
     }
     fiducials_parser = commands.add_parser(
         "fiducials", formatter_class=argparse.RawTextHelpFormatter, help="Fiducial identification.")
@@ -77,8 +86,6 @@ def parse_args():
                                   help=generate_help_text(choices), metavar="action", choices=choices.keys())
     fiducials_parser.add_argument("--redo", action="store_true", help="Clear the cache and start from the beginning")
     fiducials_parser.set_defaults(func=fiducials_commands)
-
-    # hello_parser = argparse.ArgumentParser(parents=[parser])
 
     return parser.parse_args()
 
@@ -126,12 +133,14 @@ def metadata_commands(args):
 
 
 def preprocessing_commands(args):
-    print("preprocessing?")
+    if args.action == "generate-masks":
+        preprocessing.masks.generate_masks()
+    elif args.action == "show-reference-mask":
+        preprocessing.masks.show_reference_mask()
 
 
 def fiducials_commands(args):
     """Run the fiducial handling subcommands."""
-
     if args.action == "train":
         matcher = fiducials.fiducials.FrameMatcher(cache=True)
         # matcher.filenames = matcher.filenames[:2]
@@ -143,7 +152,14 @@ def fiducials_commands(args):
         # Rerun the training if not cached, otherwise use the cache
         matcher.train()
 
-        matcher.transform_images()
+        if not os.path.isdir(matcher.transformed_image_folder) or len(os.listdir(matcher.transformed_image_folder)) == 0:
+            matcher.transform_images()
         output_filename = fiducials.fiducials.generate_fiducial_animation()
         # TODO: Add support for more operating systems than linux
-        subprocess.run(["xdg-open", output_filename], check=True)
+        subprocess.run(["xdg-open", output_filename], check=True, close_fds=True)
+    elif args.action == "transform":
+        matcher = fiducials.fiducials.FrameMatcher(cache=True)
+
+        matcher.transform_images()
+
+        print(f"Saved images to {matcher.transformed_image_folder}")

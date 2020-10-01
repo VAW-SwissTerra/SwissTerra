@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import terra
 from terra import cli
 
