@@ -12,7 +12,7 @@ def main():
 
 def parse_args():
     """Parse the arguments given through the CLI."""
-    parser = argparse.ArgumentParser(description="Processing of SwissTerra archival photographs",
+    parser = argparse.ArgumentParser(prog="terra", description="Processing of SwissTerra archival photographs",
                                      formatter_class=argparse.RawTextHelpFormatter)
 
     # Subcommands delimit different modules or themes.
