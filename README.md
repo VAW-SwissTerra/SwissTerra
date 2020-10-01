@@ -1,5 +1,13 @@
 # terra — SwissTerra archival image processing
 
+## Requirements
+
+* An **Unix based OS** (tested on Ubuntu and Arch Linux).
+
+* **Agisoft Metashape 1.6.4** (for another version, change correspondingly in `environment.yml`).
+
+* **Conda** to install the rest of the dependencies.
+
 ## Installation
 1. 	
 	Installation through conda is currently the only supported method.
