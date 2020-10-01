@@ -4,7 +4,7 @@
 
 * An **Unix based OS** (tested on Ubuntu and Arch Linux).
 
-* **Agisoft Metashape 1.6.4** (for another version, change correspondingly in `environment.yml`).
+* **Agisoft Metashape 1.6.4** (for another version, change accordingly in `environment.yml`).
 
 * **Conda** to install the rest of the dependencies.
 
