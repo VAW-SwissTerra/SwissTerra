@@ -49,7 +49,7 @@ def get_reference_fiducials(file_path: str = files.INPUT_FILES["manual_fiducials
 
 
 @statictypes.enforce
-def get_reference_transforms(reference_fiducials: pd.DataFrame) -> Dict[str, skimage.transform.EuclideanTransform]:
+def get_reference_transforms(reference_fiducials: pd.DataFrame, verbose: bool = True) -> Dict[str, skimage.transform.EuclideanTransform]:
     """
     Find the average position of each fiducial and return the transform for each image to put it there.
 
@@ -105,7 +105,8 @@ def get_reference_transforms(reference_fiducials: pd.DataFrame) -> Dict[str, ski
 
         error = np.sqrt(np.mean(np.square(np.linalg.norm([x_errors, y_errors], axis=0))))
         errors.append(error)
-    print(f"Fiducial correction RMSE: {round(np.mean(errors), 3)} px")
+    if verbose:
+        print(f"Fiducial correction RMSE: {round(np.mean(errors), 3)} px")
 
     matrices = {}
     # Go through each filename and estimate a Euclidean transform matrix between the original and corrected fiducials
@@ -778,6 +779,8 @@ class FrameMatcher:
             template_transforms = self.get_template_transforms(templates=templates)
 
         merged_transforms = self.merge_transforms([orb_transforms, template_transforms])
+        # Add the manually placed reference transform to the output
+        merged_transforms[self.orb_reference_filename] = self.manual_transforms[self.orb_reference_filename]
 
         if self.cache:
             self.save_transforms("merged_transforms.pkl", merged_transforms)
@@ -791,6 +794,21 @@ class FrameMatcher:
                   ORB: {round(orb_error, 2)}
                   ORB + template: {round(merged_error, 2)}
                   """)
+
+    @statictypes.enforce
+    def estimate(self) -> None:
+
+        if not self.cache:
+            raise AssertionError("Caching is off. Cannot estimate transforms without a cached reference.")
+
+        existing_transforms = self.load_transforms("merged_transforms.pkl")
+
+        all_filenames = self.filenames.copy()
+
+        self.filenames = [filename for filename in all_filenames if filename not in existing_transforms.keys()]
+
+        if len(self.filenames) == 0:
+            print("All transforms are already estimated")
 
     @statictypes.enforce
     def transform_images(self, transforms_file: str = "merged_transforms.pkl", output_format: str = "jpg") -> None:

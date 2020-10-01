@@ -13,10 +13,14 @@ def process_rhone():
     print("I FINSHED IT WAS THIS SIMPLE ALL ALONG")
 
 
+def get_dataset_filenames(dataset: str):
+    return open(files.INPUT_FILES[f"{dataset}_image_filenames"]).read().splitlines()
+
+
 def check_inputs(dataset: str):
     missing_inputs = []
     MissingInput = namedtuple("MissingInput", ["filepath", "filetype"])
-    image_filenames = open(files.INPUT_FILES["rhone_image_filenames"]).read().splitlines()
+    image_filenames = get_dataset_filenames(dataset)
     image_filepaths = [os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in image_filenames]
 
     frame_matcher = fiducials.fiducials.FrameMatcher(verbose=False)

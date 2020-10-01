@@ -2,6 +2,7 @@
 import argparse
 import os
 import subprocess
+from typing import List
 
 from terra import fiducials, files, metadata, preprocessing, processing
 
@@ -76,7 +77,8 @@ def parse_args():
 
     # Fiducial marker handling
     choices = {
-        "train": "Train the fiducial matcher with manually picked references",
+        "train": "Train the frame matcher with manually picked reference fiducials",
+        "estimate": "Estimate frame transforms for all images.",
         "animate": "Animate the automated fiducial matches.",
         "transform": "Apply the estimated trasnforms to the images and save them."
     }
@@ -84,7 +86,8 @@ def parse_args():
         "fiducials", formatter_class=argparse.RawTextHelpFormatter, help="Fiducial identification.")
     fiducials_parser.add_argument("action",
                                   help=generate_help_text(choices), metavar="action", choices=choices.keys())
-    fiducials_parser.add_argument("--redo", action="store_true", help="Clear the cache and start from the beginning")
+    fiducials_parser.add_argument("--dataset", type=str, default="full", help="limit the estimation to one dataset")
+    fiducials_parser.add_argument("--redo", action="store_true", help="clear the cache and start from the beginning")
     fiducials_parser.set_defaults(func=fiducials_commands)
 
     # Main processing scripts
@@ -157,8 +160,21 @@ def preprocessing_commands(args):
 
 def fiducials_commands(args):
     """Run the fiducial handling subcommands."""
+
+    def fetch_dataset_filenames(dataset: str) -> List[str]:
+        try:
+            filenames = processing.main.get_dataset_filenames(args.dataset)
+        except KeyError:
+            raise ValueError(f"Dataset '{dataset}' not configured")
+
+        return filenames
+
     if args.action == "train":
         matcher = fiducials.fiducials.FrameMatcher(cache=True)
+
+        if args.dataset != "full":
+            matcher.filenames = fetch_dataset_filenames(args.dataset)
+
         # matcher.filenames = matcher.filenames[:2]
         if args.redo:
             matcher.clear_cache()
@@ -179,6 +195,13 @@ def fiducials_commands(args):
         matcher.transform_images()
 
         print(f"Saved images to {matcher.transformed_image_folder}")
+
+    elif args.action == "estimate":
+        matcher = fiducials.fiducials.FrameMatcher(cache=True)
+        if args.dataset != "full":
+            matcher.filenames = fetch_dataset_filenames(args.dataset)
+
+        matcher.estimate()
 
 
 def processing_commands(args):
