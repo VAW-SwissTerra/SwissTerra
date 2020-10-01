@@ -20,7 +20,8 @@ TEMP_DIRECTORY = "temp"
 # Note that more directories exist. These are the directories where all filetypes are assumed to be the same.
 INPUT_DIRECTORIES = {
     "image_dir": "images/",
-    "image_meta_dir": "image_metadata/"
+    "image_meta_dir": "image_metadata/",
+    "rhone_meta": "dataset_metadata/rhone",
 }
 # Set the names of the input files (excluding the root)
 INPUT_FILES = {
@@ -28,7 +29,8 @@ INPUT_FILES = {
     "sgi_1973": "shapefiles/SGI_1973.shp",
     "outlines_1935": "shapefiles/Glacierarea_1935_split.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
-    "viewsheds": "shapefiles/V_TERRA_BGDI.shp"
+    "viewsheds": "shapefiles/V_TERRA_BGDI.shp",
+    "rhone_image_filenames": "dataset_metadata/rhone/image_filenames.txt",
 }
 # Prepend the directory and file paths with the input root directory path.
 INPUT_DIRECTORIES = {key: os.path.join(INPUT_ROOT_DIRECTORY, value) for key, value in INPUT_DIRECTORIES.items()}
@@ -41,7 +43,9 @@ INPUT_FILE_TYPES = {
     "viewsheds": "ESRI Shapefile",
     "camera_locations": "ESRI Shapefile",
     "image_dir": "TIFF image",
-    "image_meta_dir": "text"
+    "image_meta_dir": "text",
+    "rhone_meta": "text",
+    "rhone_image_filenames": "text",
 }
 
 

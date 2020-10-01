@@ -3,7 +3,7 @@ import argparse
 import os
 import subprocess
 
-from terra import fiducials, files, metadata, preprocessing
+from terra import fiducials, files, metadata, preprocessing, processing
 
 
 def main():
@@ -87,11 +87,27 @@ def parse_args():
     fiducials_parser.add_argument("--redo", action="store_true", help="Clear the cache and start from the beginning")
     fiducials_parser.set_defaults(func=fiducials_commands)
 
+    # Main processing scripts
+    choices = {
+        "rhone": "Process the Rhonegletscher data subset.",
+    }
+    processing_parser = commands.add_parser(
+        "processing", formatter_class=argparse.RawTextHelpFormatter, help="Main data processing.", description="Main data processing")
+    processing_parser.add_argument("dataset", help=generate_help_text(choices),
+                                   metavar="dataset", choices=choices.keys())
+
+    choices = {
+        "run": "Run the main processing pipeline for the dataset",
+        "check-inputs": "Check that all required dataset inputs exist."
+    }
+    processing_parser.add_argument("action", help=generate_help_text(choices), metavar="action", choices=choices.keys())
+    processing_parser.set_defaults(func=processing_commands)
+
     return parser.parse_args()
 
 
 def generate_help_text(choice_explanations):
-    help_text = """"""
+    help_text = """\n"""
     for choice, explanation in choice_explanations.items():
         help_text += f"{choice}\t{explanation}\n"
 
@@ -163,3 +179,12 @@ def fiducials_commands(args):
         matcher.transform_images()
 
         print(f"Saved images to {matcher.transformed_image_folder}")
+
+
+def processing_commands(args):
+    """Run the main processing subcommands."""
+
+    if args.action == "run":
+        processing.main.process_dataset(args.dataset)
+    elif args.action == "check-inputs":
+        processing.main.check_inputs(args.dataset)
