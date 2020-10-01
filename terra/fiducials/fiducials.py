@@ -23,13 +23,13 @@ from terra import files
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "fiducials")
 
 CACHE_FILES = {
-
+    "fiducial_template_dir":  os.path.join(TEMP_DIRECTORY, "fiducial_templates"),
+    "transforms_dir": os.path.join(TEMP_DIRECTORY, "transforms"),
+    "transformed_image_dir": os.path.join(TEMP_DIRECTORY, "transformed_images"),
 }
 
 
-# TODO: Add the reference image transform to the resultant merged_transforms.pkl
-# TODO: Populate the CACHE_FILES dictionary
-
+# TODO: Fix weird estimate bug
 
 @statictypes.enforce
 def get_reference_fiducials(file_path: str = files.INPUT_FILES["manual_fiducials"]) -> pd.DataFrame:
@@ -181,7 +181,6 @@ class FrameMatcher:
         """
         self.verbose = verbose
         self.cache = cache
-        self.image_folder = image_folder
 
         self.frame_luminance_extra = 10  # TODO: Evaluate if this should be configurable
         # Get all files with valid extensions
@@ -203,7 +202,14 @@ class FrameMatcher:
 
         # Get the manual fiducials and calculate their equivalent transforms.
         self.manual_fiducials = get_reference_fiducials()
-        self.manual_transforms = get_reference_transforms(self.manual_fiducials)
+        if not os.path.isfile(os.path.join(CACHE_FILES["transforms_dir"], "manual_transforms.pkl")) or not self.cache:
+            self.manual_transforms = get_reference_transforms(self.manual_fiducials, verbose=self.verbose)
+            if self.cache:
+                self.save_transforms("manual_transforms.pkl", self.manual_transforms)
+        else:
+            if self.verbose:
+                print("Loading cached manual transforms")
+            self.manual_transforms = self.load_transforms("manual_transforms.pkl")
 
         # Load the reference image and extract its frame
         self.orb_reference_filename = orb_reference_filename
@@ -218,13 +224,8 @@ class FrameMatcher:
         self.reference_keypoints: Optional[List[cv2.KeyPoint]] = None
         self.reference_descriptors: Optional[np.ndarray] = None
 
-        # Make temporary folder paths
-        self.temp_folder = TEMP_DIRECTORY
-        self.fiducial_template_folder = os.path.join(self.temp_folder, "fiducial_templates")
-        self.transform_folder = os.path.join(self.temp_folder, "transforms")
-        self.transformed_image_folder = os.path.join(self.temp_folder, "transformed_images")
-
-        for folder in [self.fiducial_template_folder, self.transform_folder, self.transformed_image_folder]:
+        for folder in [CACHE_FILES["fiducial_template_dir"], CACHE_FILES["transforms_dir"],
+                       CACHE_FILES["transformed_image_dir"]]:
             os.makedirs(folder, exist_ok=True)
 
         # The approximate coordinates of the fiducial centres after homogenisation transform (in y,x format)
@@ -251,8 +252,9 @@ class FrameMatcher:
         # If multiple transformations are made in order, this is the latest valid one
         self.latest_transforms: Optional[Dict[str, skimage.transform.EuclideanTransform]] = None
 
-    @statictypes.enforce
-    def read_image(self, filename: str) -> np.ndarray:
+    @staticmethod
+    # @statictypes.enforce  # TODO: Check why this was not allowed to have
+    def read_image(filename: str) -> np.ndarray:
         """
         Load an image as grayscale and raise an error if it doesn't exist.
 
@@ -260,7 +262,7 @@ class FrameMatcher:
 
         return: image: The loaded image.
         """
-        image_path = os.path.join(self.image_folder, filename)
+        image_path = os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename)
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         if image is None:  # OpenCV returns a NoneType if the image doesn't exist.
             raise AttributeError(f"Image {filename} could not be read (filepath: {image_path})")
@@ -295,9 +297,9 @@ class FrameMatcher:
 
         return: None.
         """
-        if not os.path.isdir(self.transform_folder):
-            os.makedirs(self.transform_folder)
-        with open(os.path.join(self.transform_folder, filename), "wb") as file:
+        if not os.path.isdir(CACHE_FILES["transforms_dir"]):
+            os.makedirs(CACHE_FILES["transforms_dir"])
+        with open(os.path.join(CACHE_FILES["transforms_dir"], filename), "wb") as file:
             pickle.dump(transforms, file)
 
     @statictypes.enforce
@@ -309,7 +311,7 @@ class FrameMatcher:
 
         return: transforms: The previously pickled transform dictionary.
         """
-        with open(os.path.join(self.transform_folder, filename), "rb") as file:
+        with open(os.path.join(CACHE_FILES["transforms_dir"], filename), "rb") as file:
             transforms = pickle.load(file)
         return transforms
 
@@ -449,6 +451,13 @@ class FrameMatcher:
 
     # @statictypes.enforce
     def extract_all_fiducials(self, filename: str) -> Optional[List[np.ndarray]]:
+        """
+        Extract fiducials from all corners of an image.
+
+        param: filename: The filename of the input image.
+
+        return: fiducials: A list of the extracted fiducials, or None if extraction was unsuccessful. 
+        """
         image = self.read_image(filename)
         if filename not in self.manual_transforms.keys():
             return None
@@ -475,8 +484,8 @@ class FrameMatcher:
 
         return: templates: A dictionary (top, right, bottom, left) with the fiducial templates.
         """
-        if not os.path.isdir(self.fiducial_template_folder) and self.cache:
-            os.makedirs(self.fiducial_template_folder)
+        if not os.path.isdir(CACHE_FILES["fiducial_template_dir"]) and self.cache:
+            os.makedirs(CACHE_FILES["fiducial_template_dir"])
 
         # Instantiate an empty list of fiducials for each corner (corner == fiducial right now)
         fiducials = {corner: [] for corner in self.fiducial_locations}
@@ -504,7 +513,8 @@ class FrameMatcher:
 
             templates[corner] = template
             if self.cache:
-                cv2.imwrite(os.path.join(self.fiducial_template_folder, f"fiducial_template_{corner}.tif"), template)
+                cv2.imwrite(os.path.join(CACHE_FILES["fiducial_template_dir"],
+                                         f"fiducial_template_{corner}.tif"), template)
 
         return templates
 
@@ -521,7 +531,7 @@ class FrameMatcher:
 
         templates = {}
         for corner in corners:
-            filepath = os.path.join(self.fiducial_template_folder, f"fiducial_template_{corner}.tif")
+            filepath = os.path.join(CACHE_FILES["fiducial_template_dir"], f"fiducial_template_{corner}.tif")
             template = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
             if template is None:
                 # If it should generate new ones, do so
@@ -631,7 +641,7 @@ class FrameMatcher:
         return transforms
 
     # @statictypes.enforce TODO: Fix the statictypes bug
-    def merge_transforms(self, transforms_list: List[Dict[str, skimage.transform.EuclideanTransform]]
+    def merge_transforms(self, transforms_list: List[Dict[str, skimage.transform.EuclideanTransform]], skip_unavailable: bool = False
                          ) -> Dict[str, skimage.transform.EuclideanTransform]:
         """
         Get the resultant transform from applying each transform in the order given by the input list.
@@ -640,6 +650,7 @@ class FrameMatcher:
         TODO: There might be a much simpler way of doing this. I just know that this approach works.
 
         param: transforms_list: A list of filename:transform dictionaries.
+        param: skip_unavailable: Whether or not to skip a key if it does not exist in one of the transform dictionaries.
 
         return: merged_transforms: A filename:transform dictionary.
         """
@@ -652,6 +663,10 @@ class FrameMatcher:
             print("Merging transforms")
         # Go through all files (it is assumed that all dictionaries in the lists have the same keys)
         for filename in tqdm(transforms_list[0].keys(), disable=(not self.verbose)):
+            if skip_unavailable:
+                missing = any([filename in transforms.keys() for transforms in transforms_list])
+                if missing:
+                    continue
             # These will be modified soon
             destination_coords = source_coords.copy()
             # For each transform, apply it to the destination coordinates in order.
@@ -715,7 +730,7 @@ class FrameMatcher:
             np.random.shuffle(arr)
 
         # Write the header (and overwrite a previous file)
-        with open(os.path.join(self.temp_folder, "orb_param_errors.csv"), "w") as file:
+        with open(os.path.join(TEMP_DIRECTORY, "orb_param_errors.csv"), "w") as file:
             file.write("error," + ",".join(list(params.keys())) + "\n")
 
         # Verbose will temporarily be disabled, so the initial value should be stored.
@@ -741,7 +756,7 @@ class FrameMatcher:
             values_to_write = ",".join([error] + [params[key][i] for key in params])
 
             # Write the line
-            with open(os.path.join(self.temp_folder, "orb_param_errors.csv"), "a+") as file:
+            with open(os.path.join(TEMP_DIRECTORY, "orb_param_errors.csv"), "a+") as file:
                 file.write(values_to_write + "\n")
 
         # Set the verbose setting back to its default
@@ -796,19 +811,45 @@ class FrameMatcher:
                   """)
 
     @statictypes.enforce
-    def estimate(self) -> None:
+    def estimate(self, batch_size: int = 500) -> None:
 
         if not self.cache:
             raise AssertionError("Caching is off. Cannot estimate transforms without a cached reference.")
 
+        print("Loading existing cached transforms")
         existing_transforms = self.load_transforms("merged_transforms.pkl")
+        existing_transforms = {}
 
-        all_filenames = self.filenames.copy()
+        all_filenames = np.array(self.filenames.copy())
 
-        self.filenames = [filename for filename in all_filenames if filename not in existing_transforms.keys()]
+        filenames_to_process = np.array(
+            [filename for filename in all_filenames if filename not in existing_transforms.keys() and filename != self.orb_reference_filename])
 
-        if len(self.filenames) == 0:
+        if len(filenames_to_process) == 0:
             print("All transforms are already estimated")
+
+        templates = self.load_fiducial_templates(generate_if_not_existing=False)
+
+        indices = np.repeat(np.arange(0, 20000), batch_size)[:len(filenames_to_process)]
+        for index in np.arange(indices.min(), indices.max()):
+            print(f"Running batch {index} / {indices.max()}")
+            filenames_in_batch = filenames_to_process[indices == index]
+
+            self.filenames = filenames_in_batch
+
+            orb_transforms = self.get_orb_transforms()
+            self.latest_transforms = orb_transforms
+
+            template_transforms = self.get_template_transforms(templates=templates)
+
+            merged_transforms = self.merge_transforms([orb_transforms, template_transforms], skip_unavailable=False)
+
+            for key in merged_transforms:
+                existing_transforms[key] = merged_transforms[key]
+
+            print("DUMMY SAVING")
+
+        print(len(existing_transforms))
 
     @statictypes.enforce
     def transform_images(self, transforms_file: str = "merged_transforms.pkl", output_format: str = "jpg") -> None:
@@ -824,8 +865,8 @@ class FrameMatcher:
         """
         transforms = self.load_transforms(transforms_file)
         # Make the folder if it doesn't already exist
-        if not os.path.isdir(self.transformed_image_folder):
-            os.makedirs(self.transformed_image_folder)
+        if not os.path.isdir(CACHE_FILES["transformed_image_dir"]):
+            os.makedirs(CACHE_FILES["transformed_image_dir"])
 
         if self.verbose:
             print("Transforming and saving images")
@@ -835,7 +876,7 @@ class FrameMatcher:
             transformed_image = self.transform_image(self.read_image(filename),
                                                      transforms[filename],
                                                      self.reference_frame.shape)
-            cv2.imwrite(os.path.join(self.transformed_image_folder,
+            cv2.imwrite(os.path.join(CACHE_FILES["transformed_image_dir"],
                                      filename.replace(".tif", f".{output_format}")),
                         transformed_image)
             self.progress_bar.update()
@@ -849,7 +890,7 @@ class FrameMatcher:
         if self.verbose:
             print("CLEARING CACHE")
 
-        for folder in [self.transform_folder, self.fiducial_template_folder]:
+        for folder in [CACHE_FILES["transforms_dir"], CACHE_FILES["fiducial_template_dir"]]:
             if not os.path.isdir(folder):
                 continue
             shutil.rmtree(folder)
