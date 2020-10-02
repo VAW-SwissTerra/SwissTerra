@@ -812,27 +812,45 @@ class FrameMatcher:
 
     @statictypes.enforce
     def estimate(self, batch_size: int = 500) -> None:
+        """
+        Estimate frame transforms on all the available images.
+
+        param: batch_size: The amount of pictures to process between saving the results.
+        """
 
         if not self.cache:
             raise AssertionError("Caching is off. Cannot estimate transforms without a cached reference.")
 
         print("Loading existing cached transforms")
-        existing_transforms = self.load_transforms("merged_transforms.pkl")
-        existing_transforms = {}
+        try:  # Implicitly check if self.train() has been run
+            existing_transforms = self.load_transforms("merged_transforms.pkl")
+        except FileNotFoundError:
+            print("\nNo existing transforms found. Has the matcher been trained?")
+            return
 
-        all_filenames = np.array(self.filenames.copy())
+        # Get the initial count of transforms (just for status messages)
+        initial_count = len(existing_transforms)
 
-        filenames_to_process = np.array(
-            [filename for filename in all_filenames if filename not in existing_transforms.keys() and filename != self.orb_reference_filename])
+        # Copy the full list of filenames and convert it to an array for easier indexing
+        all_filenames = np.array(self.filenames)
+
+        # Extract all images that do not already have a transform
+        filenames_to_process = all_filenames[~np.isin(
+            all_filenames, list(existing_transforms.keys()))]
 
         if len(filenames_to_process) == 0:
-            print("All transforms are already estimated")
+            print("\nAll transforms are already estimated.")
+            print(f"{initial_count} transforms exist in the cache.")
+            return
 
         templates = self.load_fiducial_templates(generate_if_not_existing=False)
 
         indices = np.repeat(np.arange(0, 20000), batch_size)[:len(filenames_to_process)]
-        for index in np.arange(indices.min(), indices.max()):
-            print(f"Running batch {index} / {indices.max()}")
+
+        for index in np.arange(indices.min(), indices.max() + 1):
+            if indices.max() > 0:
+                print(f"Dividing task in batches of {batch_size} frames")
+                print(f"Running batch {index + 1} / {indices.max()}")
             filenames_in_batch = filenames_to_process[indices == index]
 
             self.filenames = filenames_in_batch
@@ -847,9 +865,9 @@ class FrameMatcher:
             for key in merged_transforms:
                 existing_transforms[key] = merged_transforms[key]
 
-            print("DUMMY SAVING")
+            self.save_transforms("merged_transforms.pkl", existing_transforms)
 
-        print(len(existing_transforms))
+        print(f"Finshed {len(merged_transforms) - initial_count} frame transforms. Total: {len(merged_transforms)}.")
 
     @statictypes.enforce
     def transform_images(self, transforms_file: str = "merged_transforms.pkl", output_format: str = "jpg") -> None:

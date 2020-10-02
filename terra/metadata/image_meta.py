@@ -58,3 +58,15 @@ def collect_metadata(use_cached=True) -> pd.DataFrame:
     metadata.to_pickle(CACHE_FILES["image_meta"])
 
     return metadata
+
+
+def read_metadata() -> pd.DataFrame:
+    """
+    Read the already processed metadata file.
+
+    return: metadata: The metadata for all images.
+    """
+
+    metadata = pd.read_pickle(CACHE_FILES["image_meta"])
+
+    return metadata

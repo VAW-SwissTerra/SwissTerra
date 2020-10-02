@@ -70,7 +70,7 @@ def parse_args():
         "show-reference-mask": "Show the generated reference mask.",
     }
     preprocessing_parser = commands.add_parser(
-        "preprocessing", help="WIP", formatter_class=argparse.RawTextHelpFormatter)
+        "preprocessing", help="Preprocessing tasks.", formatter_class=argparse.RawTextHelpFormatter)
     preprocessing_parser.add_argument("action", help=generate_help_text(choices),
                                       metavar="action", choices=choices.keys())
     preprocessing_parser.set_defaults(func=preprocessing_commands)
@@ -184,7 +184,8 @@ def fiducials_commands(args):
         # Rerun the training if not cached, otherwise use the cache
         matcher.train()
 
-        if not os.path.isdir(matcher.transformed_image_folder) or len(os.listdir(matcher.transformed_image_folder)) == 0:
+        if not os.path.isdir(fiducials.fiducials.CACHE_FILES["transformed_image_dir"])\
+                or len(os.listdir(fiducials.fiducials.CACHE_FILES["transformed_image_dir"])) == 0:
             matcher.transform_images()
         output_filename = fiducials.fiducials.generate_fiducial_animation()
         # TODO: Add support for more operating systems than linux
@@ -194,7 +195,7 @@ def fiducials_commands(args):
 
         matcher.transform_images()
 
-        print(f"Saved images to {matcher.transformed_image_folder}")
+        print(f"Saved images to {fiducials.fiducials.CACHE_FILES['transformed_image_dir']}")
 
     elif args.action == "estimate":
         matcher = fiducials.fiducials.FrameMatcher(cache=True)
@@ -206,8 +207,7 @@ def fiducials_commands(args):
 
 def processing_commands(args):
     """Run the main processing subcommands."""
-
     if args.action == "run":
         processing.main.process_dataset(args.dataset)
     elif args.action == "check-inputs":
-        processing.main.check_inputs(args.dataset)
+        processing.inputs.check_inputs(args.dataset)
