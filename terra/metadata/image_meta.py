@@ -41,6 +41,10 @@ def collect_metadata(use_cached=True) -> pd.DataFrame:
 
         meta["date"] = pd.to_datetime(meta["Acquisition date"].strip(), format="%d.%m.%Y").date()
 
+        meta["focal_length"] = float(meta["Focal length"].replace(" mm", ""))
+
+        meta["station_name"] = f"station_{meta['Base number']}_{meta['Position']}"
+
         metadata.loc[int(meta["Inventory number"]), meta.index] = meta
 
     # Fix dtypes

@@ -56,6 +56,27 @@ def clear_cache() -> None:
     shutil.rmtree(TEMP_DIRECTORY)
 
 
+def remove_locks() -> None:
+    from terra import processing
+
+    if not os.path.isdir(processing.inputs.TEMP_DIRECTORY):
+        print("No lockfiles present")
+        return
+
+    datasets = os.listdir(processing.inputs.TEMP_DIRECTORY)
+    if len(datasets) == 0:
+        print("No lockfiles present")
+        return
+
+    for dataset in datasets:
+        dataset_root = processing.inputs.CACHE_FILES[f"{dataset}_dir"]
+        lockfile_path = os.path.join(dataset_root, f"{dataset}.files", "lock")
+
+        if os.path.isfile(lockfile_path):
+            print(f"Found {lockfile_path}. Removing.")
+            os.remove(lockfile_path)
+
+
 # TODO: Make this more usable
 def list_cache() -> None:
     """List each file in the cache."""

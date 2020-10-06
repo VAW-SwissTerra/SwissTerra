@@ -7,6 +7,7 @@ import pickle
 import shutil
 import subprocess
 import warnings
+from collections import namedtuple
 from typing import Dict, List, Optional, Tuple, Union
 
 import cv2
@@ -216,7 +217,7 @@ class FrameMatcher:
         reference_frame = self.extract_image_frame(self.read_image(orb_reference_filename))
         manual_transform = self.manual_transforms[orb_reference_filename]
         corrected_reference_frame = self.transform_image(image=reference_frame,
-                                                         transform=manual_transform.inverse,
+                                                         transform=self.invert_transform(manual_transform),
                                                          output_shape=reference_frame.shape)
         self.reference_frame = corrected_reference_frame
 
@@ -253,6 +254,23 @@ class FrameMatcher:
         self.latest_transforms: Optional[Dict[str, skimage.transform.EuclideanTransform]] = None
 
     @staticmethod
+    @statictypes.enforce
+    def invert_transform(transform: skimage.transform.EuclideanTransform) -> skimage.transform.EuclideanTransform:
+        """
+        Return the inverse of an Skimage transform object.
+
+        This is different from the builtin "transform.inverse" because this returns a proper class, not a method.
+
+        param: transform: The input transform.
+        return: inverted_transform: The inverse transform.
+        """
+        inverse_matrix = transform._inv_matrix
+
+        inverted_transform = skimage.transform.EuclideanTransform(matrix=inverse_matrix)
+
+        return inverted_transform
+
+    @staticmethod
     # @statictypes.enforce  # TODO: Check why this was not allowed to have
     def read_image(filename: str) -> np.ndarray:
         """
@@ -269,7 +287,7 @@ class FrameMatcher:
         return image
 
     @staticmethod
-    # @statictypes.enforce
+    @statictypes.enforce
     def transform_image(image: np.ndarray,
                         transform: skimage.transform.EuclideanTransform,
                         output_shape: Tuple[int, int]) -> np.ndarray:
@@ -456,12 +474,12 @@ class FrameMatcher:
 
         param: filename: The filename of the input image.
 
-        return: fiducials: A list of the extracted fiducials, or None if extraction was unsuccessful. 
+        return: fiducials: A list of the extracted fiducials, or None if extraction was unsuccessful.
         """
         image = self.read_image(filename)
         if filename not in self.manual_transforms.keys():
             return None
-        transformed_image = self.transform_image(image=image, transform=self.manual_transforms[filename].inverse,
+        transformed_image = self.transform_image(image=image, transform=self.invert_transform(self.manual_transforms[filename]),
                                                  output_shape=self.reference_frame.shape)
         fiducials = []
         # Extract each fiducial from the opened image using predefined fiducial coordinates
@@ -795,7 +813,8 @@ class FrameMatcher:
 
         merged_transforms = self.merge_transforms([orb_transforms, template_transforms])
         # Add the manually placed reference transform to the output
-        merged_transforms[self.orb_reference_filename] = self.manual_transforms[self.orb_reference_filename]
+        merged_transforms[self.orb_reference_filename] = self.invert_transform(
+            self.manual_transforms[self.orb_reference_filename])
 
         if self.cache:
             self.save_transforms("merged_transforms.pkl", merged_transforms)
@@ -810,7 +829,7 @@ class FrameMatcher:
                   ORB + template: {round(merged_error, 2)}
                   """)
 
-    @statictypes.enforce
+    @ statictypes.enforce
     def estimate(self, batch_size: int = 500) -> None:
         """
         Estimate frame transforms on all the available images.
@@ -869,7 +888,7 @@ class FrameMatcher:
 
         print(f"Finshed {len(merged_transforms) - initial_count} frame transforms. Total: {len(merged_transforms)}.")
 
-    @statictypes.enforce
+    @ statictypes.enforce
     def transform_images(self, transforms_file: str = "merged_transforms.pkl", output_format: str = "jpg") -> None:
         """
         Transform all images using the provided (cached) transforms file.
@@ -912,6 +931,43 @@ class FrameMatcher:
             if not os.path.isdir(folder):
                 continue
             shutil.rmtree(folder)
+
+    def get_fiducial_reference_positions(self):
+        """
+        Get the fiducial positions in the reference frame.
+
+        return: transformed_fiducials: Fiducial pixel positions (y, x).
+        """
+
+        initial_fiducials = self.manual_fiducials[self.manual_fiducials["camera"]
+                                                  == self.orb_reference_filename]
+
+        transformed_fiducials = self.manual_transforms[self.orb_reference_filename](
+            initial_fiducials[["x_px", "y_px"]].values)[:, ::-1]
+
+        return transformed_fiducials
+
+    def calculate_fiducial_projections(self):
+        fiducial_reference_positions = self.get_fiducial_reference_positions()
+
+        Fiducial = namedtuple("Fiducial", field_names=["name", "x", "y"])
+        Fiducials = namedtuple("Fiducials", field_names=["top", "right", "bottom", "left"])
+
+        fiducials = {}
+        for filename, transform in self.load_transforms("merged_transforms.pkl").items():
+            transformed_fiducial_positions = transform(fiducial_reference_positions[:, ::-1])
+
+            fiducials[filename] = Fiducials(
+                Fiducial("top", transformed_fiducial_positions[0, 0], transformed_fiducial_positions[0, 1]),
+                Fiducial("right", transformed_fiducial_positions[1, 0], transformed_fiducial_positions[1, 1]),
+                Fiducial("bottom", transformed_fiducial_positions[2, 0], transformed_fiducial_positions[2, 1]),
+                Fiducial("left", transformed_fiducial_positions[3, 0], transformed_fiducial_positions[3, 1]))
+
+        return fiducials
+
+    def calculate_fiducial_coordinates(self):
+
+        raise NotImplementedError()
 
 
 def generate_fiducial_animation(output=os.path.join(TEMP_DIRECTORY, "fiducial_template_corr_animation.mp4")):
@@ -1013,6 +1069,5 @@ def generate_fiducial_animation(output=os.path.join(TEMP_DIRECTORY, "fiducial_te
 
 if __name__ == "__main__":
     matcher = FrameMatcher(cache=True)
-    # matcher.filenames = matcher.filenames[:2]
-    matcher.clear_cache()
-    matcher.train()
+
+    matcher.calculate_fiducial_projections()

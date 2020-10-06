@@ -11,15 +11,19 @@ c_stdout = ctypes.c_void_p.in_dll(libc, 'stdout')
 
 
 @contextmanager
-def no_stdout(stream=None):
+def no_stdout(stream=None, disable=False):
     """
     Redirect the stdout to a stream file.
 
     Source: https://eli.thegreenplace.net/2015/redirecting-all-kinds-of-stdout-in-python/
 
     param: stream: a BytesIO object to write to.
+    param: disable: whether to temporarily disable the feature.
 
     """
+    if disable:
+        yield
+        return
     if stream is None:
         stream = io.BytesIO()
     # The original fd stdout points to. Usually 1 on POSIX systems.

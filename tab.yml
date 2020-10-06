@@ -1,0 +1,8 @@
+repo: swissterra
+doc: "SwissTerra archival image processing"
+
+tabs:
+        - tab: etc 
+          doc: "Run miscellaneous scripts"
+        - tab: run
+          doc: "Run the script"
