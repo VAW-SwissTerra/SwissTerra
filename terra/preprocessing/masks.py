@@ -40,16 +40,18 @@ def generate_masks(buffer_size: int = 20) -> None:
     # Instantiate a FrameMatcher instance to use static methods and get metadata
     matcher = fiducials.FrameMatcher(verbose=False)
 
+    matcher.filenames.append(matcher.orb_reference_filename)
+
     # Check if transformed images exist (the ones to make the reference from)
-    if not os.path.isdir(matcher.transformed_image_folder):
+    if not os.path.isdir(fiducials.CACHE_FILES["transformed_image_dir"]):
         print("No transformed images found to make a reference frame. Generating them.")
         matcher.verbose = True
         matcher.transform_images()
         matcher.verbose = False
 
     # Collect the filenames with their full path
-    filenames = [os.path.join(matcher.transformed_image_folder, filename)
-                 for filename in os.listdir(matcher.transformed_image_folder)]
+    filenames = [os.path.join(fiducials.CACHE_FILES["transformed_image_dir"], filename)
+                 for filename in os.listdir(fiducials.CACHE_FILES["transformed_image_dir"])]
 
     # Reserve the variable for progress bars which jump in and out of existence
     progress_bar: Optional[tqdm] = None
@@ -110,7 +112,7 @@ def generate_masks(buffer_size: int = 20) -> None:
             files.INPUT_DIRECTORIES["image_dir"], filename), cv2.IMREAD_GRAYSCALE).shape
         # Transform the mask
         transformed_frame = matcher.transform_image(
-            reference_mask, transforms[filename].inverse, output_shape=original_shape)
+            reference_mask, matcher.invert_transform(transforms[filename]), output_shape=original_shape)
         # Write it to the temporary mask directory
         cv2.imwrite(full_path, transformed_frame)
         progress_bar.update()

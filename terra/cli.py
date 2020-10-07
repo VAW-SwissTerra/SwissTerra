@@ -25,7 +25,8 @@ def parse_args():
     # Subcommands for cache (temp folder) handling
     choices = {
         "clear": "Remove everything in the cache folder.",
-        "list": "List files in the cache"
+        "list": "List files in the cache",
+        "remove-locks": "Remove Metashape lock files if they exist",
     }
     cache_parser = commands.add_parser(
         "cache", formatter_class=argparse.RawTextHelpFormatter, help="Handle the cache (temporary files).")
@@ -131,6 +132,9 @@ def cache_commands(args):
         files.clear_cache()
     elif args.action == "list":
         files.list_cache()
+
+    elif args.action == "remove-locks":
+        files.remove_locks()
 
 
 def files_commands(args):

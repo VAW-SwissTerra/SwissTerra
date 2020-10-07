@@ -20,6 +20,7 @@ for dataset in DATASETS:
     CACHE_FILES[f"{dataset}_input_dir"] = os.path.join(CACHE_FILES[f"{dataset}_dir"], "input")
     CACHE_FILES[f"{dataset}_camera_orientations"] = os.path.join(
         CACHE_FILES[f"{dataset}_input_dir"], "camera_orientations.csv")
+    CACHE_FILES[f"{dataset}_temp_dir"] = os.path.join(CACHE_FILES[f"{dataset}_dir"], "temp")
 
 
 def get_dataset_filenames(dataset: str):
