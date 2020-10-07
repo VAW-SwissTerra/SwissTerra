@@ -19,4 +19,5 @@ dependencies:
         - pip=20.2.3
         - pip:
                 - statictypes
-                - http://download.agisoft.com/Metashape-1.6.4-cp35.cp36.cp37-abi3-linux_x86_64.whl
+                - http://download.agisoft.com/Metashape-1.6.5-cp35.cp36.cp37-abi3-linux_x86_64.whl
+                - python-magic=0.4.*

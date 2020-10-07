@@ -5,3 +5,5 @@ terra.egg-info/
 temp/
 .env
 TODO
+.git-devel/
+setup-devel.sh
