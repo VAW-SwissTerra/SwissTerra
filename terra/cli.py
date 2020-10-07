@@ -91,18 +91,20 @@ def parse_args():
     fiducials_parser.add_argument("--redo", action="store_true", help="clear the cache and start from the beginning")
     fiducials_parser.set_defaults(func=fiducials_commands)
 
-    # Main processing scripts
+    # Datasets. TODO: make these dynamic
     choices = {
         "rhone": "Process the Rhonegletscher data subset.",
     }
-    processing_parser = commands.add_parser(
-        "processing", formatter_class=argparse.RawTextHelpFormatter, help="Main data processing.", description="Main data processing")
+    processing_parser = commands.add_parser("processing", formatter_class=argparse.RawTextHelpFormatter,
+                                            help="Main data processing.", description="Main data processing")
     processing_parser.add_argument("dataset", help=generate_help_text(choices),
                                    metavar="dataset", choices=choices.keys())
 
     choices = {
         "run": "Run the main processing pipeline for the dataset",
-        "check-inputs": "Check that all required dataset inputs exist."
+        "rerun": "Run the main processing pipeline from the start",
+        "check-inputs": "Check that all required dataset inputs exist.",
+        "generate-inputs": "Generate all required dataset inputs."
     }
     processing_parser.add_argument("action", help=generate_help_text(choices), metavar="action", choices=choices.keys())
     processing_parser.set_defaults(func=processing_commands)
@@ -167,7 +169,7 @@ def fiducials_commands(args):
 
     def fetch_dataset_filenames(dataset: str) -> List[str]:
         try:
-            filenames = processing.main.get_dataset_filenames(args.dataset)
+            filenames = processing.inputs.get_dataset_filenames(args.dataset)
         except KeyError:
             raise ValueError(f"Dataset '{dataset}' not configured")
 
@@ -213,5 +215,9 @@ def processing_commands(args):
     """Run the main processing subcommands."""
     if args.action == "run":
         processing.main.process_dataset(args.dataset)
+    if args.action == "rerun":
+        processing.main.process_dataset(args.dataset, redo=True)
     elif args.action == "check-inputs":
         processing.inputs.check_inputs(args.dataset)
+    elif args.action == "generate-inputs":
+        processing.inputs.generate_inputs(args.dataset)

@@ -124,3 +124,32 @@ def check_inputs(dataset: str) -> None:
                 print(*(f"\tMissing {missing.filepath}" for missing in missing_keys))
 
         print(f"Suggested fix: {help_text}\n")
+
+
+def generate_inputs(dataset: str):
+    """
+    Generate all necessary inputs for a dataset.
+
+    param: dataset: The name of the dataset to check.
+    """
+    files.check_data()
+
+    def big_print(string: str):
+        print("\n================================")
+        print(string)
+        print("================================\n")
+
+    big_print("Collecting metadata")
+    metadata.image_meta.collect_metadata()
+
+    big_print("Finding fiducial locations")
+    frame_matcher = fiducials.fiducials.FrameMatcher()
+    frame_matcher.filenames = [filename for filename in get_dataset_filenames(dataset)
+                               if filename != frame_matcher.orb_reference_filename]
+    frame_matcher.train()
+    frame_matcher.estimate()
+
+    big_print("Generating masks")
+    preprocessing.masks.generate_masks()
+
+    big_print("Finished. The processing pipeline is ready")

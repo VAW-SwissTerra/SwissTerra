@@ -67,6 +67,8 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
         metashape.build_dems(chunks_to_process, dataset)
         metashape.save_document(doc)
 
+    return
+
     chunks_to_process = metashape.get_unfinished_chunks(aligned_chunks, metashape.Step.ORTHOMOSAIC)
     if len(chunks_to_process) > 0:
         print("Building orthomosaics")

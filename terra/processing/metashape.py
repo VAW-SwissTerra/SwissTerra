@@ -11,14 +11,13 @@ import pandas as pd
 import statictypes
 from tqdm import tqdm
 
-from terra import fiducials, files, metadata
+from terra import fiducials, files
 from terra.constants import CONSTANTS
 from terra.preprocessing import masks
-from terra.processing import inputs, main, processing
+from terra.processing import inputs, processing
 from terra.utilities import no_stdout
 
-CACHE_FILES = {
-}
+CACHE_FILES = {}
 
 
 for _dataset in inputs.DATASETS:
@@ -47,15 +46,12 @@ def new_document(dataset: str) -> ms.Document:
 
     return: doc: The newly created Metashape document.
     """
-
     # Make the temporary directory (also makes the project root directory)
     os.makedirs(inputs.CACHE_FILES[f"{dataset}_temp_dir"], exist_ok=True)
     with no_stdout():
         doc = ms.Document()
 
         doc.save(CACHE_FILES[f"{dataset}_metashape_project"])
-
-    print(f"Created new Metashape project for {dataset}")
 
     if doc.read_only:
         raise AssertionError("New document is in read-only mode. Is it open?")
@@ -190,11 +186,7 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
     for sensor in sensors.values():
         sensor.calibrateFiducials(resolution=CONSTANTS["scanning_resolution"] * 1e3)
 
-    with no_stdout():
-        chunk.importReference(inputs.CACHE_FILES[f"{doc.meta['dataset']}_camera_orientations"],
-                              delimiter=",", create_markers=False, columns="nxyzabc",
-                              items=ms.ReferenceItems.ReferenceItemsCameras, format=ms.ReferenceFormat.ReferenceFormatCSV,
-                              crs=chunk.crs)
+    import_reference(chunk, inputs.CACHE_FILES[f"{doc.meta['dataset']}_camera_orientations"])
 
     groups = {}
     for camera in chunk.cameras:
@@ -219,15 +211,35 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
     return chunk
 
 
+def import_reference(chunk: ms.Chunk, filepath: str):
+    chunk.euler_angles = ms.EulerAnglesOPK
+
+    reference_data = pd.read_csv(filepath, index_col="label").astype(float)
+    reference_data.index = reference_data.index.str.replace(".tif", "")
+
+    for camera in chunk.cameras:
+        cam_data = reference_data.loc[camera.label]
+        camera.reference.location = cam_data[["easting", "northing", "altitude"]].values
+
+        camera.reference.rotation = ms.Utils.mat2opk(ms.Utils.ypr2mat(
+            ms.Vector(cam_data[["yaw", "pitch", "roll"]].values)))
+
+
 @statictypes.enforce
-def align_cameras(chunk: ms.Chunk) -> bool:
+def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
     """
     Align all cameras in a chunk.
 
     param: chunk: The chunk whose images shall be aligned.
+    param: fixed_sensor: Whether to fix the sensors during the alignment.
 
     return: aligned: Whether the alignment was successful or not.
     """
+
+    fixed_sensors = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
+    if fixed_sensor:
+        for sensor in chunk.sensors:
+            sensor.fixed_calibration = True
 
     with no_stdout():
         chunk.matchPhotos(reference_preselection=True, filter_mask=True)
@@ -235,11 +247,18 @@ def align_cameras(chunk: ms.Chunk) -> bool:
 
         # Check if no cameras were aligned (if all transforms are None)
         if all([camera.transform is None for camera in chunk.cameras]):
+            if fixed_sensor:
+                for sensor in chunk.sensors:
+                    sensor.fixed_calibration = fixed_sensors[sensor]
             return False
 
         # Add extra tie points
         chunk.triangulatePoints()
         chunk.optimizeCameras()
+
+    if fixed_sensor:
+        for sensor in chunk.sensors:
+            sensor.fixed_calibration = fixed_sensors[sensor]
     return True
 
 

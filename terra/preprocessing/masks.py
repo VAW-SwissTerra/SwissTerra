@@ -4,14 +4,14 @@ import pickle
 from collections import deque
 from typing import Optional
 
-import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import scipy.ndimage
-import skimage.transform
-import statictypes
 from tqdm import tqdm
 
+import cv2
+import matplotlib.pyplot as plt
+import skimage.transform
+import statictypes
 from terra import files
 from terra.fiducials import fiducials
 
@@ -40,42 +40,32 @@ def generate_masks(buffer_size: int = 20) -> None:
     # Instantiate a FrameMatcher instance to use static methods and get metadata
     matcher = fiducials.FrameMatcher(verbose=False)
 
-    matcher.filenames.append(matcher.orb_reference_filename)
-
-    # Check if transformed images exist (the ones to make the reference from)
-    if not os.path.isdir(fiducials.CACHE_FILES["transformed_image_dir"]):
-        print("No transformed images found to make a reference frame. Generating them.")
-        matcher.verbose = True
-        matcher.transform_images()
-        matcher.verbose = False
-
-    # Collect the filenames with their full path
-    filenames = [os.path.join(fiducials.CACHE_FILES["transformed_image_dir"], filename)
-                 for filename in os.listdir(fiducials.CACHE_FILES["transformed_image_dir"])]
+    transforms = matcher.load_transforms("merged_transforms.pkl")
 
     # Reserve the variable for progress bars which jump in and out of existence
     progress_bar: Optional[tqdm] = None
 
-    @statictypes.enforce
-    def extract_frame(filename: str) -> np.ndarray:
+    def extract_frame(filename_and_transform) -> np.ndarray:
         """
         Read an image and extract its frame.
 
-        param: filename: The full path of an image.
+        param: filename_and_transform: The filename and the transform of the image.
 
         return: frame: The thresholded image frame.
         """
-        image = cv2.imread(filename, flags=cv2.IMREAD_GRAYSCALE)
-        frame = matcher.extract_image_frame(image)
+        filename, transform = filename_and_transform
+        image = matcher.read_image(filename)
+        transformed_image = matcher.transform_image(image, transform, output_shape=matcher.reference_frame.shape)
+        frame = matcher.extract_image_frame(transformed_image)
 
         progress_bar.update()
         return frame
 
     print("Extracting image frames")
     # Extract frames from every image
-    with tqdm(total=len(filenames)) as progress_bar:
+    with tqdm(total=len(transforms)) as progress_bar:
         with concurrent.futures.ThreadPoolExecutor(max_workers=matcher.max_open_files) as executor:
-            frames = executor.map(extract_frame, filenames)
+            frames = executor.map(extract_frame, list(transforms.items()))
 
     print("Merging results")
     # Get the median frame as a reference frame
@@ -87,17 +77,14 @@ def generate_masks(buffer_size: int = 20) -> None:
     # Extract the wanted colour (an arbitrary value of 200) to get the binary mask
     filled_frame = (median_frame == 200).astype(np.uint8) * 255
 
+    # Make temporary directories
+    os.makedirs(CACHE_FILES["mask_dir"], exist_ok=True)
+
     # Buffer the mask to account for outlying imperfections and save the mask
     reference_mask = scipy.ndimage.minimum_filter(filled_frame, size=buffer_size, mode="constant")
     cv2.imwrite(CACHE_FILES["reference_mask"], reference_mask)
 
-    # Load the estimated transforms to transform the reference mask to the images' original transform.
-    transforms = matcher.load_transforms("merged_transforms.pkl")
-
-    # Make temporary directories
-    os.makedirs(CACHE_FILES["mask_dir"], exist_ok=True)
-
-    @statictypes.enforce
+    @ statictypes.enforce
     def transform_and_write_frame(filename: str) -> None:
         """
         Transform a frame/mask to the original transform of an image.
