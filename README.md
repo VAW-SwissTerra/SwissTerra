@@ -4,9 +4,11 @@
 
 * An **Unix based OS** (tested on Ubuntu and Arch Linux).
 
-* **Agisoft Metashape 1.6.4** (for another version, change accordingly in `environment.yml`).
+* **[Agisoft Metashape 1.6.5](https://www.agisoft.com/downloads/installer/)** (for another version, change accordingly in `environment.yml`).
 
-* **Conda** to install the rest of the dependencies.
+* **[Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)** to install the rest of the dependencies.
+
+* **[ASIFT](http://www.ipol.im/pub/art/2011/my-asift/)** installed and executable as `asift`
 
 ## Installation
 1. 	

@@ -185,7 +185,6 @@ def get_matching_candidates(angle_threshold: float = 45.0, distance_threshold: f
     # Extract the filenames of the pairs
     pairs = get_filename(fulfilling_all)
 
-    print(pairs.shape)
     return pairs
 
 

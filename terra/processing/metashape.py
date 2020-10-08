@@ -4,14 +4,15 @@ import os
 import time
 from collections import deque
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import Metashape as ms
+import numpy as np
 import pandas as pd
 import statictypes
 from tqdm import tqdm
 
-from terra import fiducials, files
+from terra import fiducials, files, metadata
 from terra.constants import CONSTANTS
 from terra.preprocessing import masks
 from terra.processing import inputs, processing
@@ -366,3 +367,128 @@ def build_orthomosaics(chunks: List[ms.Chunk], resolution: float) -> None:
     for chunk in tqdm(chunks):
         with no_stdout(disable=False):
             chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData, resolution=resolution)
+
+
+def merge_chunks(doc: ms.Document, chunks: List[ms.Chunk], optimize: bool = True, remove_old: bool = False) -> ms.Chunk:
+    """
+    Merge Metashape chunks.
+
+    param: doc: The Metashape document.
+    param: chunks: A list of chunks to merge.
+    param: optimize: Whether to optimize cameras after merging.
+    param: remove_old: Whether to remove
+
+    return: merged_chunk: The merged chunk.
+
+    """
+
+    chunk_positions = []
+    for i, chunk in enumerate(doc.chunks):
+        if chunk in chunks:
+            chunk_positions.append(i)
+
+    with no_stdout():
+        doc.mergeChunks(chunks=chunk_positions, merge_markers=True)
+
+    merged_chunk: Optional[ms.Chunk] = None
+    for chunk in doc.chunks:
+        if chunk.label == "Merged Chunk":
+            merged_chunk = chunk
+            break
+
+    if merged_chunk is None:
+        raise RuntimeError("Couldn't find the merged chunk")
+
+    if remove_old:
+        for chunk in chunks:
+            doc.remove(chunk)
+
+    sensors = {}
+    # Merge all sensors with the same label
+    for sensor in merged_chunk.sensors:
+        # If a new label is found, add that as the reference
+        if not sensor.label in sensors:
+            sensors[sensor.label] = sensor
+            continue
+
+        # Move the fiducials in the duplicate sensor to the reference
+        for fiducial in sensor.fiducials:
+            for ref_fiducial in sensors[sensor.label].fiducials:
+                if ref_fiducial.label == fiducial.label:
+                    break
+
+            for camera, projection in fiducial.projections.items():
+                ref_fiducial.projections[camera] = projection
+
+            merged_chunk.remove(fiducial)
+
+        # Move all the cameras of the duplicate sensor to the reference
+        for camera in merged_chunk.cameras:
+            if camera.sensor.label == sensor.label:
+                camera.sensor = sensors[sensor.label]
+
+        # Remove the duplicate sensor
+        merged_chunk.remove(sensor)
+
+    for marker in merged_chunk.markers:
+        if not marker.type == ms.Marker.Type.Fiducial:
+            continue
+        for sensor_label in sensors:
+            if sensor_label in marker.label:
+                marker.sensor = sensors[sensor_label]
+
+    for label, sensor in sensors.items():
+        if label == "unknown":
+            continue
+        sensor.calibrateFiducials(resolution=CONSTANTS["scanning_resolution"] * 1e3)
+
+    if optimize:
+        with no_stdout():
+            merged_chunk.optimizeCameras(adaptive_fitting=True)
+
+    return merged_chunk
+
+
+@statictypes.convert
+def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.float64:
+
+    projected_position = marker.projections[camera].coord
+    reprojected_position = camera.project(marker.position)
+
+    if reprojected_position is None:
+        return np.NaN
+
+    diff = (projected_position - reprojected_position).norm()
+
+    return diff
+
+
+def get_asift_markers(chunk):
+    all_candidates = metadata.image_meta.get_matching_candidates()
+
+    cameras = {camera.label + ".tif": camera for camera in chunk.cameras}
+    matching_candidates = [candidates for candidates in all_candidates if candidates[0]
+                           in cameras and candidates[1] in cameras]
+
+    for filename1, filename2 in tqdm(matching_candidates):
+        filepath1 = os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename1)
+        filepath2 = os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename2)
+
+        matches = processing.match_asift(filepath1, filepath2, verbose=False)
+
+        for i, match in matches.iterrows():
+            marker = chunk.addMarker()
+
+            for tag, filename in zip(["img1", "img2"], [filename1, filename2]):
+                marker.projections[cameras[filename]] = ms.Marker.Projection(
+                    ms.Vector(match[[f"{tag}_x", f"{tag}_y"]].values), True)
+
+            errors = []
+            for filename in [filename1, filename2]:
+                errors.append(get_marker_reprojection_error(cameras[filename], marker))
+
+            if np.mean(errors) == np.NaN:
+                chunk.remove(marker)
+                continue
+
+            marker.label = f"asift_{filename1}_{filename2}_{i}"

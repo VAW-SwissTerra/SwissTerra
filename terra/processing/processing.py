@@ -10,6 +10,7 @@ import statictypes
 
 from terra import constants, files
 from terra.processing import inputs
+from terra.utilities import no_stdout
 
 CACHE_FILES = {
     "asift_temp_dir": os.path.join(inputs.TEMP_DIRECTORY, "asift_temp")
@@ -84,15 +85,19 @@ def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None)
     subprocess.run(commands, input=pipeline, check=True, encoding="utf-8")
 
 
-def match_asift(image1: np.ndarray, image2: np.ndarray) -> pd.DataFrame:
+def match_asift(filepath1: str, filepath2: str, verbose: bool = True) -> pd.DataFrame:
     """
     Find matches between two images using the ASIFT (Affine-Scale Invariant Feature transform).
 
-    param: image1: The first image to match.
-    param: image2: The second image to match.
+    param: filepath1: The first image filepath to match.
+    param: filepath2: The second image filepath to match.
+    param: verbose: Whether to print ASIFT outputs.
 
     return: matches: The computed matches between the images.
     """
+    image1 = cv2.imread(filepath1, cv2.IMREAD_GRAYSCALE)
+    image2 = cv2.imread(filepath2, cv2.IMREAD_GRAYSCALE)
+
     # Trim the image to remove the frame and reduce it so ASIFT can use it
     side_trim = 500  # To remove the frame
     new_width = 2500  # To downscale the image so ASIFT can work
@@ -115,7 +120,8 @@ def match_asift(image1: np.ndarray, image2: np.ndarray) -> pd.DataFrame:
     asift_commands = ["asift"] + [os.path.join(CACHE_FILES["asift_temp_dir"], filename)
                                   for filename in asift_files] + ["0"]
     # Run ASIFT
-    subprocess.run(asift_commands, check=True)
+    with no_stdout(disable=verbose):
+        subprocess.run(asift_commands, check=True)
 
     # Load the matches produced by ASIFT
     matches = pd.read_csv(os.path.join(CACHE_FILES["asift_temp_dir"], "matches.txt"), delimiter="  ",
@@ -126,5 +132,4 @@ def match_asift(image1: np.ndarray, image2: np.ndarray) -> pd.DataFrame:
         matches[[f"{label}_x", f"{label}_y"]] *= (image.shape[1] - side_trim * 2) / new_width
     matches += side_trim
 
-    matches.to_csv(os.path.join(CACHE_FILES["asift_temp_dir"], "fixed_matches.csv"))
     return matches

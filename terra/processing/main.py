@@ -1,6 +1,6 @@
 import os
 from collections import namedtuple
-from typing import List
+from typing import List, Optional
 
 import Metashape as ms
 import numpy as np
@@ -32,28 +32,46 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
     image_meta = inputs.get_dataset_metadata(dataset)
 
-    aligned_chunks: List[ms.Chunk] = []
-    for station_number, station_meta in tqdm(image_meta.groupby("Base number")):
-        if station_meta["Position"].unique().shape[0] < 2:
-            print(f"Station {station_number} only has position {station_meta['Position'].iloc[0]}. Skipping.")
-            continue
+    merged_chunk: Optional[ms.Chunk] = None
+    for chunk in doc.chunks:
+        if chunk.label == "Merged Chunk":
+            merged_chunk = chunk
+            break
 
-        chunk_label = f"station_{station_number}"
+    if merged_chunk is None or redo:
+        aligned_chunks: List[ms.Chunk] = []
+        print("Aligning stations")
+        for station_number, station_meta in tqdm(image_meta.groupby("Base number")):
+            if station_meta["Position"].unique().shape[0] < 2:
+                print(f"Station {station_number} only has position {station_meta['Position'].iloc[0]}. Skipping.")
+                continue
 
-        # Check if the chunk already exists
-        if any([chunk.label == chunk_label for chunk in doc.chunks]):
-            chunk = [chunk for chunk in doc.chunks if chunk.label == chunk_label][0]
-            aligned = metashape.has_alignment(chunk)
+            chunk_label = f"station_{station_number}"
 
-        else:
-            chunk = metashape.new_chunk(doc, filenames=list(
-                station_meta["Image file"].values), chunk_label=chunk_label)
+            # Check if the chunk already exists
+            if any([chunk.label == chunk_label for chunk in doc.chunks]):
+                chunk = [chunk for chunk in doc.chunks if chunk.label == chunk_label][0]
+                aligned = metashape.has_alignment(chunk)
 
-            aligned = metashape.align_cameras(chunk, fixed_sensor=True)
-            metashape.save_document(doc)
+            else:
+                chunk = metashape.new_chunk(doc, filenames=list(
+                    station_meta["Image file"].values), chunk_label=chunk_label)
 
-        if aligned:
-            aligned_chunks.append(chunk)
+                aligned = metashape.align_cameras(chunk, fixed_sensor=True)
+                metashape.save_document(doc)
+
+            if aligned:
+                aligned_chunks.append(chunk)
+
+        print("Merging chunks")
+        merged_chunk = metashape.merge_chunks(doc, aligned_chunks, remove_old=True, optimize=True)
+
+    print("Extracting ASIFT markers")
+    metashape.get_asift_markers(merged_chunk)
+
+    metashape.save_document(doc)
+
+    return
 
     chunks_to_process = metashape.get_unfinished_chunks(aligned_chunks, metashape.Step.DENSE_CLOUD)
     if len(chunks_to_process) > 0:
