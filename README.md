@@ -46,3 +46,11 @@ Run `terra data check` to validate that all files can be located.
 
 ## Usage
 Run `terra -h` to see the how to run the program.
+
+1. Set up a dataset (TODO: ADD INSTRUCTIONS ON HOW TO DO THIS)
+
+2. `terra files check`: See that all files can be found
+
+3. `terra processing DATASET generate-inputs`: Generate all inputs with default settings.
+
+4. `terra processing DATASET run`: Start the main pipeline
