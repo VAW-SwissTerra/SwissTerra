@@ -149,7 +149,6 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
 
     return: The newly created Metashape chunk.
     """
-    # TODO: Add explicit yaw, pitch, roll as rotation format.
     with no_stdout():
         chunk = doc.addChunk()
 
@@ -157,6 +156,8 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
         chunk.label = chunk_label
 
     chunk.crs = ms.CoordinateSystem(CONSTANTS["crs_epsg"])
+    chunk.camera_location_accuracy = ms.Vector([2] * 3)
+    chunk.camera_rotation_accuracy = ms.Vector([1] * 3)
 
     filepaths = [os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in filenames]
 
@@ -302,8 +303,17 @@ class Quality(Enum):
     LOW: int = 8
 
 
+class Filtering(Enum):
+    """Dense cloud point filtering."""
+
+    AGGRESSIVE: ms.FilterMode = ms.FilterMode.AggressiveFiltering
+    MODERATE: ms.FilterMode = ms.FilterMode.ModerateFiltering
+    MILD: ms.FilterMode = ms.FilterMode.MildFiltering
+    NOFILTER: ms.FilterMode = ms.FilterMode.NoFiltering
+
+
 @statictypes.convert
-def build_dense_clouds(chunks: List[ms.Chunk], quality: Quality = Quality.HIGH) -> None:
+def build_dense_clouds(chunks: List[ms.Chunk], quality: Quality = Quality.HIGH, filtering: Filtering = Filtering.AGGRESSIVE) -> None:
     """
     Generate dense clouds for all given chunks.
 
@@ -311,9 +321,37 @@ def build_dense_clouds(chunks: List[ms.Chunk], quality: Quality = Quality.HIGH) 
     param: quality: The quality of the dense cloud.
     """
     for chunk in tqdm(chunks):
-        with no_stdout():
-            chunk.buildDepthMaps(downscale=quality.value, filter_mode=ms.FilterMode.AggressiveFiltering)
-            chunk.buildDenseCloud(point_confidence=True)
+        # station_XXXX_A becomes station_XXXX
+        stereo_pairs = np.unique([group.label[:-2] for group in chunk.camera_groups])
+
+        print(f"Building dense clouds for {len(stereo_pairs)} stereo-pairs.")
+        for stereo_pair in tqdm(stereo_pairs):
+            for camera in chunk.cameras:
+                # Set it as enabled if the camera group label fits with the stereo pair label
+                camera.enabled = stereo_pair in camera.group.label
+
+            with no_stdout():
+                chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
+                try:
+                    chunk.buildDenseCloud(point_confidence=True)
+                except Exception as exception:
+                    if "Zero resolution" in str(exception):
+                        continue
+                    raise exception
+
+            chunk.dense_cloud.label = stereo_pair
+
+            # Remove all points with a low confidence
+            chunk.dense_cloud.setConfidenceFilter(0, 2)
+            chunk.dense_cloud.removePoints(list(range(128)))
+            chunk.dense_cloud.resetFilters()
+
+            # Unset the dense cloud as default to allow for more dense clouds to be constructed
+            chunk.dense_cloud = None
+
+        # Reset the enabled flags
+        for camera in chunk.cameras:
+            camera.enabled = True
 
 
 @statictypes.convert

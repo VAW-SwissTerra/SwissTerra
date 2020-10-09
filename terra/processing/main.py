@@ -57,7 +57,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
                 chunk = metashape.new_chunk(doc, filenames=list(
                     station_meta["Image file"].values), chunk_label=chunk_label)
 
-                aligned = metashape.align_cameras(chunk, fixed_sensor=True)
+                aligned = metashape.align_cameras(chunk, fixed_sensor=False)
                 metashape.save_document(doc)
 
             if aligned:
@@ -66,8 +66,11 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
         print("Merging chunks")
         merged_chunk = metashape.merge_chunks(doc, aligned_chunks, remove_old=True, optimize=True)
 
-    print("Extracting ASIFT markers")
-    metashape.get_asift_markers(merged_chunk)
+#    print("Extracting ASIFT markers")
+#    metashape.get_asift_markers(merged_chunk)
+
+    metashape.build_dense_clouds([merged_chunk], quality=metashape.Quality.ULTRA,
+                                 filtering=metashape.Filtering.MILD)
 
     metashape.save_document(doc)
 
