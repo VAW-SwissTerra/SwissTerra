@@ -3,9 +3,10 @@ import os
 import pathlib
 import shutil
 from collections import namedtuple
-from typing import Generator
+from typing import Generator, List, Union
 
 import magic
+import statictypes
 
 # Set the default input root directory
 INPUT_ROOT_DIRECTORY = "input"
@@ -44,7 +45,7 @@ INPUT_FILE_TYPES = {
     "camera_locations": "ESRI Shapefile",
     "image_dir": "TIFF image",
     "image_meta_dir": "text",
-    "rhone_meta": "text",
+    "rhone_meta": ["text", "data"],
     "rhone_image_filenames": "text",
 }
 
@@ -54,6 +55,23 @@ def clear_cache() -> None:
     if not os.path.isdir(TEMP_DIRECTORY):
         print("Cache not existing")
     shutil.rmtree(TEMP_DIRECTORY)
+
+
+@statictypes.enforce
+def check_filetype(estimated_filetype: str, allowed_types: Union[str, List[str]]) -> bool:
+    """
+    Check if a file has an expected filetype.
+
+    param: estimated_filetype: The filetype that was estimated by magic. 
+    param: allowed_types: A string or a list of strings to check.
+
+    return: correct: Whether the filetype contains the correct keyword.
+    """
+    if isinstance(allowed_types, str):
+        allowed_types = [allowed_types]
+
+    correct = any([file_type in estimated_filetype for file_type in allowed_types])
+    return correct
 
 
 def remove_locks() -> None:
@@ -115,7 +133,7 @@ def check_data() -> None:
             full_path = os.path.join(directory, filename)
             estimated_filetype = magic.from_file(full_path)
 
-            valid = INPUT_FILE_TYPES[key] in estimated_filetype
+            valid = check_filetype(estimated_filetype, INPUT_FILE_TYPES[key])
             if not valid:
                 invalid_files.append(InvalidData(full_path, INPUT_FILE_TYPES[key], estimated_filetype))
 
@@ -132,7 +150,7 @@ def check_data() -> None:
 
         # Check its filetype
         estimated_filetype = magic.from_file(INPUT_FILES[key])
-        valid = INPUT_FILE_TYPES[key] in estimated_filetype
+        valid = check_filetype(estimated_filetype, INPUT_FILE_TYPES[key])
         if not valid:
             invalid_files.append(InvalidData(INPUT_FILES[key], INPUT_FILE_TYPES[key], estimated_filetype))
 
