@@ -313,45 +313,44 @@ class Filtering(Enum):
 
 
 @statictypes.convert
-def build_dense_clouds(chunks: List[ms.Chunk], quality: Quality = Quality.HIGH, filtering: Filtering = Filtering.AGGRESSIVE) -> None:
+def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Quality.HIGH,
+                       filtering: Filtering = Filtering.AGGRESSIVE) -> None:
     """
-    Generate dense clouds for all given chunks.
+    Generate dense clouds for all stereo-pairs in a given chunk.
 
-    param: chunks: The list of chunks to process.
+    param: chunk: The chunk to process.
+    param: pairs: A list of the stereo-pairs to process.
     param: quality: The quality of the dense cloud.
+    param: filtering: The dense cloud filtering setting.
     """
-    for chunk in tqdm(chunks):
-        # station_XXXX_A becomes station_XXXX
-        stereo_pairs = np.unique([group.label[:-2] for group in chunk.camera_groups])
 
-        print(f"Building dense clouds for {len(stereo_pairs)} stereo-pairs.")
-        for stereo_pair in tqdm(stereo_pairs):
-            for camera in chunk.cameras:
-                # Set it as enabled if the camera group label fits with the stereo pair label
-                camera.enabled = stereo_pair in camera.group.label
-
-            with no_stdout():
-                chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
-                try:
-                    chunk.buildDenseCloud(point_confidence=True)
-                except Exception as exception:
-                    if "Zero resolution" in str(exception):
-                        continue
-                    raise exception
-
-            chunk.dense_cloud.label = stereo_pair
-
-            # Remove all points with a low confidence
-            chunk.dense_cloud.setConfidenceFilter(0, 2)
-            chunk.dense_cloud.removePoints(list(range(128)))
-            chunk.dense_cloud.resetFilters()
-
-            # Unset the dense cloud as default to allow for more dense clouds to be constructed
-            chunk.dense_cloud = None
-
-        # Reset the enabled flags
+    for pair in tqdm(pairs, desc="Building dense clouds for stereo-pairs"):
         for camera in chunk.cameras:
-            camera.enabled = True
+            # Set it as enabled if the camera group label fits with the stereo pair label
+            camera.enabled = pair in camera.group.label
+
+        with no_stdout():
+            chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
+            try:
+                chunk.buildDenseCloud(point_confidence=True)
+            except Exception as exception:
+                if "Zero resolution" in str(exception):
+                    continue
+                raise exception
+
+        chunk.dense_cloud.label = pair
+
+        # Remove all points with a low confidence
+        chunk.dense_cloud.setConfidenceFilter(0, CONSTANTS["dense_cloud_min_confidence"] - 1)
+        chunk.dense_cloud.removePoints(list(range(128)))
+        chunk.dense_cloud.resetFilters()
+
+        # Unset the dense cloud as default to allow for more dense clouds to be constructed
+        chunk.dense_cloud = None
+
+    # Reset the enabled flags
+    for camera in chunk.cameras:
+        camera.enabled = True
 
 
 @statictypes.convert
@@ -530,3 +529,99 @@ def get_asift_markers(chunk):
                 continue
 
             marker.label = f"asift_{filename1}_{filename2}_{i}"
+
+
+@statictypes.enforce
+def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
+    """
+    Get a list of stereo-pair group names.
+
+    param: chunk: The chunk to analyse.
+
+    return: pairs: A list of stereo-pair group names.
+
+    """
+    pairs: List[str] = []
+    for group in chunk.camera_groups:
+        pair = group.label.replace("_R", "").replace("_L", "")
+
+        if pair not in pairs:
+            pairs.append(pair)
+
+    return pairs
+
+
+@statictypes.enforce
+def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
+    """
+    List all stereo-pairs that have not yet finished a step.
+
+    param: chunk: The chunk to analyse.
+    param: step: The step to check for.
+
+    return: unfinished_pairs: A list of stereo-pairs that are unfinished.
+    """
+
+    pairs = get_chunk_stereo_pairs(chunk)
+
+    if step == Step.DENSE_CLOUD:
+        labels_to_check = [cloud.label for cloud in chunk.dense_clouds]
+    else:
+        raise NotImplementedError()
+
+    unfinished_pairs = [pair for pair in pairs if pair not in labels_to_check]
+
+    return unfinished_pairs
+
+
+def build_local_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False) -> List[str]:
+    """
+    Build DEMs in local coordinates.
+
+    param: chunk: The chunk to export from.
+    param: pairs: Which stereo-pairs to use.
+    param: redo: Whether to remake dense clouds or DEMs if they already exist.
+
+    return: filepaths: The filepaths of the exported clouds.
+    """
+    assert chunk.meta["dataset"] is not None
+
+    filepaths: List[str] = []
+
+    dense_clouds = [cloud for cloud in chunk.dense_clouds if cloud.label in pairs]
+
+    for cloud in tqdm(dense_clouds, desc="Exporting local dense clouds"):
+        if not cloud.label in pairs:
+            continue
+        cloud_filepath = os.path.join(
+            inputs.CACHE_FILES["{dataset}_temp_dir".format(dataset=chunk.meta["dataset"])],
+            "{cloud_label}_local_dense.ply".format(cloud_label=cloud.label))
+        filepaths.append(cloud_filepath)
+
+        if redo or not os.path.isfile(cloud_filepath):
+            chunk.dense_cloud = cloud
+            with no_stdout():
+                chunk.exportPoints(cloud_filepath)
+
+    chunk.dense_cloud = None
+
+    progress_bar = tqdm(total=len(filepaths), desc="Generating DEMs")
+
+    def build_dem(filepath: str) -> str:
+        """
+        Generate a DEM from a point cloud.
+        """
+
+        output_filepath = os.path.splitext(filepath)[0] + "_DEM.tif"
+        if redo or not os.path.isfile(filepath):
+            processing.generate_dem(filepath, output_dem_path=output_filepath, resolution=5.0, interpolate_pixels=0)
+
+        progress_bar.update()
+
+        return output_filepath
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        dem_filepaths = list(executor.map(build_dem, filepaths))
+
+    progress_bar.close()
+    return dem_filepaths

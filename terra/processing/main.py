@@ -36,6 +36,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     for chunk in doc.chunks:
         if chunk.label == "Merged Chunk":
             merged_chunk = chunk
+            merged_chunk.meta["dataset"] = dataset
             break
 
     if merged_chunk is None or redo:
@@ -65,12 +66,20 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
         print("Merging chunks")
         merged_chunk = metashape.merge_chunks(doc, aligned_chunks, remove_old=True, optimize=True)
+        merged_chunk.meta["dataset"] = dataset
 
 #    print("Extracting ASIFT markers")
 #    metashape.get_asift_markers(merged_chunk)
 
-    metashape.build_dense_clouds([merged_chunk], quality=metashape.Quality.ULTRA,
-                                 filtering=metashape.Filtering.MILD)
+    pairs = metashape.get_chunk_stereo_pairs(merged_chunk)
+    unfinished_pairs = metashape.get_unfinished_pairs(merged_chunk, metashape.Step.DENSE_CLOUD)
+
+    if len(unfinished_pairs) > 0 or redo:
+        metashape.build_dense_clouds(merged_chunk, pairs=pairs if redo else unfinished_pairs, quality=metashape.Quality.HIGH,
+                                     filtering=metashape.Filtering.MILD)
+
+    dem_paths = metashape.build_local_dems(merged_chunk, pairs)
+    print(dem_paths)
 
     metashape.save_document(doc)
 
