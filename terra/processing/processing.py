@@ -2,8 +2,10 @@
 import json
 import os
 import subprocess
+import tempfile
+import warnings
 from collections import namedtuple
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -12,7 +14,8 @@ import rasterio as rio
 import scipy.ndimage
 import statictypes
 
-from terra import constants, files
+from terra import files
+from terra.constants import CONSTANTS
 from terra.processing import inputs
 from terra.utilities import no_stdout
 
@@ -23,7 +26,7 @@ CACHE_FILES = {
 
 @statictypes.enforce
 def generate_dem(point_cloud_path: str, output_dem_path: str,
-                 resolution: float = 1.0, interpolate_pixels: int = 10) -> None:
+                 resolution: float = 1.0, interpolate_pixels: int = 10) -> str:
     """
     Generate a DEM from a point cloud using PDAL.
 
@@ -74,26 +77,55 @@ def generate_dem(point_cloud_path: str, output_dem_path: str,
         subprocess.run(gdal_commands, check=True)
 
     # Set the correct CRS metadata.
-    gdal_commands = ["gdal_edit.py", "-a_srs", constants.CONSTANTS["crs_epsg"].replace("::", ":"), output_dem_path]
+    gdal_commands = ["gdal_edit.py", "-a_srs", str(CONSTANTS["crs_epsg"]).replace("::", ":"), output_dem_path]
     subprocess.run(gdal_commands, check=True)
 
     return output_dem_path
 
 
-@ statictypes.enforce
-def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None) -> None:
+# @statictypes.convert
+def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
+                      parameters: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Run a PDAL pipeline.
 
     param: pipeline: The pipeline to run.
     param: output_metadata_file: Optional. The filepath for the pipeline metadata.
+    param: parameters: Optional. Parameters to fill the pipeline with, e.g. {"FILEPATH": "/path/to/file"}.
+
+    return: output_meta: The metadata produced by the output.
     """
-    commands = ["pdal", "pipeline", "--stdin"]
+    # Create a temporary directory to save the output metadata in
+    temp_dir = tempfile.TemporaryDirectory()
+    # Fill the pipeline with
+    if parameters is not None:
+        for key in parameters:
+            # Warn if the key cannot be found in the pipeline
+            if key not in pipeline:
+                warnings.warn(
+                    f"{key}:{parameters[key]} given to the PDAL pipeline but the key was not found", RuntimeWarning)
+            # Replace every occurrence of the key inside the pipeline with its corresponding value
+            pipeline = pipeline.replace(key, str(parameters[key]))
 
-    if output_metadata_file is not None:
-        commands += ["--metadata", output_metadata_file]
+    try:
+        json.loads(pipeline)  # Throws an error if the pipeline is poorly formatted
+    except json.decoder.JSONDecodeError as exception:
+        raise ValueError("Pipeline was poorly formatted: \n" + pipeline + "\n" + str(exception))
 
+    # Run PDAL with the pipeline as the stdin
+    commands = ["pdal", "pipeline", "--stdin", "--metadata", os.path.join(temp_dir.name, "meta.json")]
     subprocess.run(commands, input=pipeline, check=True, encoding="utf-8")
+
+    # Load the temporary metadata file
+    with open(os.path.join(temp_dir.name, "meta.json")) as infile:
+        output_meta = json.load(infile)
+
+    # Save it with a different name if one was provided
+    if output_metadata_file is not None:
+        with open(output_metadata_file, "w") as outfile:
+            json.dump(output_meta, outfile)
+
+    return output_meta
 
 
 def match_asift(filepath1: str, filepath2: str, verbose: bool = True) -> pd.DataFrame:
@@ -106,6 +138,7 @@ def match_asift(filepath1: str, filepath2: str, verbose: bool = True) -> pd.Data
 
     return: matches: The computed matches between the images.
     """
+    warnings.warn("ASIFT is deprecated", DeprecationWarning)
     image1 = cv2.imread(filepath1, cv2.IMREAD_GRAYSCALE)
     image2 = cv2.imread(filepath2, cv2.IMREAD_GRAYSCALE)
 
@@ -158,9 +191,13 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     return: result: The resultant PDAL output. Returns None if there was no alignment.
 
     """
-    # TODO: Replace the temporary files with actual non-persistent tempfiles
     # Create a bounds object to more explicitly handle bounds.
     Bounds = namedtuple("Bounds", ["x_min", "x_max", "y_min", "y_max"])
+
+    temp_dir = tempfile.TemporaryDirectory()
+    tempfiles = {os.path.splitext(filename)[0]: os.path.join(temp_dir.name, filename) for filename in [
+        "reference_cropped.tif", "aligned_cropped.tif", "aligned_post_icp.tif", "result_meta.json"
+    ]}
 
     def get_bounds(filepath) -> Bounds:
         """
@@ -196,8 +233,9 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
         return None
 
     # Read the DEMs
-    reference_original = cv2.imread(reference_path, cv2.IMREAD_ANYDEPTH)
-    aligned_original = cv2.imread(aligned_path, cv2.IMREAD_ANYDEPTH).astype(reference_original.dtype)
+    dtype = np.float32
+    reference_original = cv2.imread(reference_path, cv2.IMREAD_ANYDEPTH).astype(dtype)
+    aligned_original = cv2.imread(aligned_path, cv2.IMREAD_ANYDEPTH).astype(dtype)
 
     # Set the nan_value to actual nans
     reference_original[reference_original == nan_value] = np.nan
@@ -211,7 +249,7 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
         min(reference_bounds.x_min, aligned_bounds.x_min),
         max(reference_bounds.x_max, aligned_bounds.x_max),
         min(reference_bounds.y_min, aligned_bounds.y_min),
-        max(reference_bounds.y_max, aligned_bounds.y_min))
+        max(reference_bounds.y_max, aligned_bounds.y_max))
 
     # Determine what shape the new_bounds corresponds to
     new_shape = (int((new_bounds.y_max - new_bounds.y_min) // resolution),
@@ -233,6 +271,9 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
         upper_corner = (int((new_bounds.y_max - old_bounds.y_max) // resolution),
                         int((old_bounds.x_min - new_bounds.x_min) // resolution))
 
+        if 0 in heights.shape or 0 in resized.shape:
+            raise ValueError("Ruh roh!")
+
         # Assign the initial dataset's values to the new array
         resized[upper_corner[0]: upper_corner[0] + heights.shape[0],
                 upper_corner[1]: upper_corner[1] + heights.shape[1]] = heights
@@ -252,6 +293,9 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     reference[~overlapping_buffered] = np.nan
     aligned[~overlapping_buffered] = np.nan
 
+    if np.all(np.isnan(reference)) or np.all(np.isnan(aligned)):
+        return None
+
     def write_raster(filepath: str, heights: np.ndarray):
         """
         Write a DEM as a GeoTiff.
@@ -268,21 +312,23 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
                       count=1, transform=transform, dtype=heights.dtype) as outfile:
             outfile.write(heights, 1)
 
-    # Assign filepaths to the new cropped DEMs
-    new_reference_path = os.path.splitext(reference_path)[0] + "_cropped.tif"
-    new_aligned_path = os.path.splitext(aligned_path)[0] + "_cropped.tif"
-
     # Write the cropped DEMs
-    write_raster(new_reference_path, reference)
-    write_raster(new_aligned_path, aligned)
+    write_raster(tempfiles["reference_cropped"], reference)
+    write_raster(tempfiles["aligned_cropped"], aligned)
 
-    # Set the parameters for PDAL to include in the ICP registration.
-    pdal_params = {
-        "REFERENCE_FILENAME": new_reference_path,
-        "ALIGNED_FILENAME": new_aligned_path,
-        "OUTPUT_FILENAME": os.path.splitext(new_aligned_path)[0] + "_aligned.tif",
-        "RESOLUTION": resolution,
-    }
+    def validate_raster(filepath: str) -> bool:
+        with rio.open(filepath) as dataset:
+            heights = dataset.read(1)
+
+            n_valid = np.count_nonzero(~np.isnan(heights.flatten()))
+            if n_valid > 0:
+                return True
+
+            return False
+
+    for filename in ["reference_cropped", "aligned_cropped"]:
+        if not validate_raster(tempfiles[filename]):
+            return None
 
     # Read the datasets (A1, B1), filter out nans (A2, B2) and then run ICP
     # TODO: Maybe remove the output raster
@@ -315,32 +361,76 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
         {
             "inputs": ["A2", "B2"],
             "type": "filters.icp"
-        },
-        {
-            "type": "writers.gdal",
-            "filename": "OUTPUT_FILENAME",
-            "resolution": "RESOLUTION",
-            "output_type": "mean"
         }
     ]
     '''
-    # Fill the pdal parameters to the pipeline
-    for key in pdal_params:
-        pdal_pipeline = pdal_pipeline.replace(key, str(pdal_params[key]))
-
-    # Assign a filepath to the output metadata
-    output_metadata_path = os.path.splitext(new_aligned_path)[0] + "_icp_meta.json"
-
     # Run the pdal pipeline
-    run_pdal_pipeline(pdal_pipeline, output_metadata_file=output_metadata_path)
+    result = run_pdal_pipeline(pdal_pipeline, parameters={
+        "REFERENCE_FILENAME": tempfiles["reference_cropped"],
+        "ALIGNED_FILENAME": tempfiles["aligned_cropped"],
+    })["stages"]["filters.icp"]
 
-    # Open the resultant metadata file and extract the ICP results.
-    with open(output_metadata_path) as infile:
-        result = json.loads(infile.read())["stages"]["filters.icp"]
+    result["composed"] = result["composed"].replace("\n", " ")
 
     return result
 
 
+def transform_points(points: pd.DataFrame, composed_transform: str, inverse: bool = False) -> pd.DataFrame:
+    """
+    Transform a set of points using a composed PDAL transform matrix.
+
+    param: points: The points to transform.
+    param: composed_transform: The composed PDAL transform matrix.
+    param: inverse: Whether to apply the inverse transform.
+
+    return: transformed_points: The transformed points.
+    """
+    # Check that all expected dimensions exist in the input points
+    for dim in ["X", "Y", "Z"]:
+        assert dim in points.columns
+
+    # Make a temporary directory and create temporary filepaths
+    temp_dir = tempfile.TemporaryDirectory()
+    tempfiles = {
+        "points": os.path.join(temp_dir.name, "points.csv"),
+        "transformed_points": os.path.join(temp_dir.name, "transformed_points.csv")
+    }
+    # Save the points to a temporary file
+    points[["X", "Y", "Z"]].to_csv(tempfiles["points"], index=False)
+
+    # Construct the PDAL transformation pipeline
+    pdal_pipeline = '''
+    [
+        {
+            "type": "readers.text",
+            "filename": "INPUT_FILEPATH"
+        },
+        {
+            "type": "filters.transformation",
+            "matrix": "COMPOSED_TRANSFORM",
+            "invert": "INVERT"
+        },
+        {
+            "type": "writers.text",
+            "filename": "OUTPUT_FILEPATH"
+        }
+    ]
+    '''
+    # Run the pipeline with the correct parameters
+    run_pdal_pipeline(pdal_pipeline, parameters={
+        "INPUT_FILEPATH": tempfiles["points"],
+        "COMPOSED_TRANSFORM": composed_transform,
+        "INVERT": str(inverse).lower(),
+        "OUTPUT_FILEPATH": tempfiles["transformed_points"]
+    })
+
+    # Read the transformed points as a DataFrame again
+    transformed_points = pd.read_csv(tempfiles["transformed_points"])
+
+    return transformed_points
+
+
 if __name__ == "__main__":
-    coalign_dems("/home/erik/Projects/ETH/SwissTerra/temp/processing/rhone/temp/station_1666_local_dense_DEM.tif",
-                 "/home/erik/Projects/ETH/SwissTerra/temp/processing/rhone/temp/station_1668_local_dense_DEM.tif")
+    result = coalign_dems("/home/erik/Projects/ETH/SwissTerra/temp/processing/rhone/temp/station_1666_local_dense_DEM.tif",
+                          "/home/erik/Projects/ETH/SwissTerra/temp/processing/rhone/temp/station_1668_local_dense_DEM.tif")
+    print(result)
