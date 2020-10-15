@@ -2,6 +2,7 @@
 
 import statictypes
 
+from terra.constants import CONSTANTS
 from terra.processing import inputs, metashape
 
 
@@ -38,8 +39,21 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
                                      filtering=metashape.Filtering.MILD)
     metashape.save_document(doc)
 
-    # Coalign the stereo-pairs using inter-DEM-pair-ICP
+    # Coalign stereo-pair DEMs with each other and generate markers from their alignment
     metashape.coalign_stereo_pairs(chunk, pairs=pairs)
+    # Run a bundle adjustment with these new markers.
+    metashape.optimize_cameras(chunk)
+    # Remove markers that still have an unreasonable error and run another bundle adjustment.
+    metashape.remove_bad_markers(chunk)
+    metashape.optimize_cameras(chunk)
+    metashape.save_document(doc)
+
+    # Rebuild the dense clouds with the proper pose
+    metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.ULTRA,
+                                 filtering=metashape.Filtering.MILD)
+    metashape.save_document(doc)
+
+    metashape.build_dems(chunk=chunk, pairs=pairs, resolution=CONSTANTS["resolution"])
     metashape.save_document(doc)
 
 

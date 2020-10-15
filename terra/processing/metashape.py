@@ -578,7 +578,7 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
 
     diff = (projected_position - reprojected_position).norm()
 
-    image_size = max(camera.photo.meta["File/ImageWidth"], camera.photo.meta["File/ImageHeight"])
+    image_size = max(int(camera.photo.meta["File/ImageWidth"]), int(camera.photo.meta["File/ImageHeight"]))
     # Check if the reprojected position difference is too high
     if diff > image_size:
         return np.NaN
@@ -587,19 +587,22 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
 
 
 @statictypes.enforce
-def get_mean_marker_reprojection_errors(markers: List[ms.Marker]) -> np.float64:
+def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Marker, np.float64]:
     """
     Calculate the mean reprojection error for a marker, checked on all pinned projections.
     """
-    errors = {marker: List[np.float64]() for marker in markers}
+    errors = {marker: [] for marker in markers if marker.type == ms.Marker.Type.Regular}
 
-    for marker in markers:
+    for marker in errors:
         for camera, projection in marker.projections.items():
             if not projection.pinned:
                 continue
             errors[marker].append(get_marker_reprojection_error(camera, marker))
 
-    mean_errors = {marker: np.nanmean(error_list, dtype=np.float64) for marker, error_list in errors.items()}
+    def rms(values: List[np.float64]):
+        return np.sqrt(np.nanmean(np.square(values))).astype(np.float64)
+
+    mean_errors = {marker: rms(error_list) for marker, error_list in errors.items()}
 
     return mean_errors
 
@@ -679,13 +682,16 @@ def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
     return unfinished_pairs
 
 
-def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False) -> Dict[str, str]:
+def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
+               resolution: float = 5.0, interpolate_pixels: int = 0) -> Dict[str, str]:
     """
-    Build DEMs in local coordinates.
+    Build DEMs for each stereo-pair.
 
     param: chunk: The chunk to export from.
     param: pairs: Which stereo-pairs to use.
     param: redo: Whether to remake dense clouds or DEMs if they already exist.
+    param: resolution: The DEM resolution in metres.
+    param: interpolate_pixels: The amount of small gaps to interpolate in the DEMs
 
     return: filepaths: The filepaths of the exported clouds for each stereo-pair.
     """
@@ -725,7 +731,8 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False) -> Dict[st
         pair, filepath = pair_and_filepath
         output_filepath = os.path.splitext(filepath)[0] + "_DEM.tif"
         if redo or not os.path.isfile(output_filepath):
-            processing.generate_dem(filepath, output_dem_path=output_filepath, resolution=5.0, interpolate_pixels=0)
+            processing.generate_dem(filepath, output_dem_path=output_filepath,
+                                    resolution=resolution, interpolate_pixels=interpolate_pixels)
 
         progress_bar.update()
 
@@ -857,8 +864,8 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str]):
                 continue
 
             marker = chunk.addMarker()
-            error = round(float(result["fitness"]), 3)
-            marker.label = f"tie_{pair_1}_to_{pair_2}_{j}_error_{error}"
+            error = round(float(result["fitness"]), 2)
+            marker.label = f"tie_{pair_1}_to_{pair_2}_num_{j}_error_{error}_m"
 
             marker.projections[reference_image] = ms.Marker.Projection(reference_projection, True)
             marker.projections[aligned_image] = ms.Marker.Projection(aligned_projection, True)
@@ -867,5 +874,38 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str]):
 
     progress_bar.close()
 
+
+def optimize_cameras(chunk: ms.Chunk) -> None:
+    """
+    Optimize the chunk camera alignment.
+    """
+
     with no_stdout():
-        chunk.optimizeCameras()
+        chunk.optimizeCameras(fit_f=True, fit_cx=True, fit_cy=True, fit_b1=True, fit_b2=True,
+                              fit_k1=True, fit_k2=True, fit_k3=True, fit_k4=True, fit_p1=True, fit_p2=True)
+
+
+def remove_bad_markers(chunk, marker_error_threshold: float = 4.0):
+    """
+    Remove every marker in the chunk that has is above the reprojection threshold.
+    """
+    # Get the rms reprojection error for each marker
+    errors = get_rms_marker_reprojection_errors(chunk.markers)
+    # Find the markers whose values are too high
+    too_high = [marker for marker in errors if errors[marker] > marker_error_threshold]
+
+    # Loop through each marker and check if it belongs to a tie point family
+    for marker in too_high:
+        if "tie_" in marker.label:
+            # If it is, remove all of its friends
+            tie_family = marker.label[:marker.label.index("_num_")]
+
+            # Find the friends with the same marker label family
+            for marker2 in errors:
+                if marker2 in too_high:
+                    continue
+                if tie_family in marker2.label:
+                    too_high.append(marker2)
+
+    for marker in too_high:
+        chunk.remove(marker)
