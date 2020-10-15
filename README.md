@@ -8,8 +8,6 @@
 
 * **[Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)** to install the rest of the dependencies.
 
-* **[ASIFT](http://www.ipol.im/pub/art/2011/my-asift/)** installed and executable as `asift`
-
 ## Installation
 1. 	
 	Installation through conda is currently the only supported method.
