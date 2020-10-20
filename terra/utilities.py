@@ -5,6 +5,9 @@ import os
 import sys
 import tempfile
 from contextlib import contextmanager
+from typing import Any
+
+import statictypes
 
 libc = ctypes.CDLL(None)
 c_stdout = ctypes.c_void_p.in_dll(libc, 'stdout')
@@ -56,3 +59,32 @@ def no_stdout(stream=None, disable=False):
     finally:
         tfile.close()
         os.close(saved_stdout_fd)
+
+
+class ConstantType:
+    """Generic readonly document constants class."""
+
+    @statictypes.enforce
+    def __getitem__(self, key: str) -> Any:
+        """
+        Get an item like a dict.
+
+        param: key: The attribute name.
+
+        return: attribute: The value of the attribute.
+        """
+        attribute = self.__getattribute__(key)
+        return attribute
+
+    @staticmethod
+    def raise_readonly_error(key, value):
+        """Raise a readonly error if a value is trying to be set."""
+        raise ValueError(f"Trying to change a constant. Key: {key}, value: {value}")
+
+    def __setattr__(self, key, value):
+        """Override the Constants.key = value action."""
+        self.raise_readonly_error(key, value)
+
+    def __setitem__(self, key, value):
+        """Override the Constants['key'] = value action."""
+        self.raise_readonly_error(key, value)

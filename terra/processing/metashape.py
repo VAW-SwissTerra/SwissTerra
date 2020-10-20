@@ -176,7 +176,7 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
     if chunk_label is not None:
         chunk.label = chunk_label
 
-    chunk.crs = ms.CoordinateSystem(CONSTANTS["crs_epsg"])
+    chunk.crs = ms.CoordinateSystem(CONSTANTS.crs_epsg)
     chunk.camera_location_accuracy = ms.Vector([2] * 3)
     chunk.camera_rotation_accuracy = ms.Vector([1] * 3)
 
@@ -195,7 +195,7 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
         sensor.film_camera = True
         sensor.label = instrument
 
-        sensor.pixel_size = ms.Vector([CONSTANTS["scanning_resolution"] * 1e3] * 2)
+        sensor.pixel_size = ms.Vector([CONSTANTS.scanning_resolution * 1e3] * 2)
         sensor.focal_length = dataframe.iloc[0]["focal_length"]
         generate_fiducials(chunk, sensor)
 
@@ -207,7 +207,7 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
         camera.sensor = sensors[sensor_label]
 
     for sensor in sensors.values():
-        sensor.calibrateFiducials(resolution=CONSTANTS["scanning_resolution"] * 1e3)
+        sensor.calibrateFiducials(resolution=CONSTANTS.scanning_resolution * 1e3)
 
     import_reference(chunk, inputs.CACHE_FILES[f"{doc.meta['dataset']}_camera_orientations"])
 
@@ -335,29 +335,33 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
     param: quality: The quality of the dense cloud.
     param: filtering: The dense cloud filtering setting.
     """
-    for pair in tqdm(pairs, desc="Building dense clouds for stereo-pairs"):
-        for camera in chunk.cameras:
-            # Set it as enabled if the camera group label fits with the stereo pair label
-            camera.enabled = pair in camera.group.label
+    with tqdm(total=len(pairs)) as progress_bar:
+        for pair in pairs:
+            progress_bar.desc = f"Building dense clouds for {pair}"
+            for camera in chunk.cameras:
+                # Set it as enabled if the camera group label fits with the stereo pair label
+                camera.enabled = pair in camera.group.label
 
-        with no_stdout():
-            chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
-            try:
-                chunk.buildDenseCloud(point_confidence=True)
-            except Exception as exception:
-                if "Zero resolution" in str(exception):
-                    continue
-                raise exception
+            with no_stdout():
+                chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
+                try:
+                    chunk.buildDenseCloud(point_confidence=True)
+                except Exception as exception:
+                    if "Zero resolution" in str(exception):
+                        continue
+                    raise exception
 
-        chunk.dense_cloud.label = pair
+            chunk.dense_cloud.label = pair
 
-        # Remove all points with a low confidence
-        chunk.dense_cloud.setConfidenceFilter(0, CONSTANTS["dense_cloud_min_confidence"] - 1)
-        chunk.dense_cloud.removePoints(list(range(128)))
-        chunk.dense_cloud.resetFilters()
+            # Remove all points with a low confidence
+            chunk.dense_cloud.setConfidenceFilter(0, CONSTANTS.dense_cloud_min_confidence - 1)
+            chunk.dense_cloud.removePoints(list(range(128)))
+            chunk.dense_cloud.resetFilters()
 
-        # Unset the dense cloud as default to allow for more dense clouds to be constructed
-        chunk.dense_cloud = None
+            # Unset the dense cloud as default to allow for more dense clouds to be constructed
+            chunk.dense_cloud = None
+
+            progress_bar.update()
 
     # Reset the enabled flags
     for camera in chunk.cameras:
@@ -400,7 +404,7 @@ def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
         progress_bar.update()
 
     # Generate DEMs for all point clouds in multiple threads.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=CONSTANTS["max_point_cloud_threads"]) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CONSTANTS.max_point_cloud_threads) as executor:
         # Evaluate the generators into an empty deque
         deque(executor.map(dem_thread_process, filepaths), maxlen=0)
 
@@ -494,7 +498,7 @@ def merge_chunks(doc: ms.Document, chunks: List[ms.Chunk], optimize: bool = True
     for label, sensor in sensors.items():
         if label == "unknown":
             continue
-        sensor.calibrateFiducials(resolution=CONSTANTS["scanning_resolution"] * 1e3)
+        sensor.calibrateFiducials(resolution=CONSTANTS.scanning_resolution * 1e3)
 
     if optimize:
         with no_stdout():
@@ -591,7 +595,8 @@ def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Mark
     """
     Calculate the mean reprojection error for a marker, checked on all pinned projections.
     """
-    errors = {marker: [] for marker in markers if marker.type == ms.Marker.Type.Regular}
+    errors: Dict[ms.Marker, List[np.float64]] = {marker: []
+                                                 for marker in markers if marker.type == ms.Marker.Type.Regular}
 
     for marker in errors:
         for camera, projection in marker.projections.items():
@@ -609,7 +614,7 @@ def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Mark
 
 def get_asift_markers(chunk):
     """Get markers from ASIFT matching."""
-    warnings.warn(DeprecationWarning)
+    warnings.warn("ASIFT is deprecated", DeprecationWarning)
     all_candidates = metadata.image_meta.get_matching_candidates()
 
     cameras = {camera.label + ".tif": camera for camera in chunk.cameras}
@@ -640,7 +645,7 @@ def get_asift_markers(chunk):
             marker.label = f"asift_{filename1}_{filename2}_{i}"
 
 
-@ statictypes.enforce
+@statictypes.enforce
 def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
     """
     Get a list of stereo-pair group names.
@@ -660,7 +665,7 @@ def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
     return pairs
 
 
-@ statictypes.enforce
+@statictypes.enforce
 def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
     """
     List all stereo-pairs that have not yet finished a step.
@@ -713,7 +718,7 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
         if redo or not os.path.isfile(cloud_filepath):
             chunk.dense_cloud = cloud
             with no_stdout():
-                chunk.exportPoints(cloud_filepath, crs=chunk.crs)
+                chunk.exportPoints(cloud_filepath, crs=chunk.crs, source_data=ms.DataSource.DenseCloudData)
 
     chunk.dense_cloud = None
 
@@ -729,6 +734,7 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
         return: (pair, output_filepath): The stereo-pair label and the path to the output DEM.
         """
         pair, filepath = pair_and_filepath
+        progress_bar.desc = f"Generating DEMs for {pair}"
         output_filepath = os.path.splitext(filepath)[0] + "_DEM.tif"
         if redo or not os.path.isfile(output_filepath):
             processing.generate_dem(filepath, output_dem_path=output_filepath,
@@ -745,28 +751,38 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     return dem_filepaths
 
 
-def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str]):
+def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], tie_group_radius: float = 30.0):
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.
 
     param: chunk: The chunk to analyse.
     param: pairs: The stereo-pairs to coaling.
+    param: tie_group_radius: The distance of all tie points from the centroid of the alignment.
     """
-    # Build local DEMs to subsequently coalign
+
+    if chunk.meta["dataset"] is None:
+        raise ValueError("Chunk dataset meta is undefined")
+    # Build DEMs to subsequently coalign
     dem_paths = build_dems(chunk, pairs=pairs)
 
+    # Find all combinations of pairs that had DEMs successfully generated.
     pair_combinations = list(itertools.combinations([pair for pair in pairs if pair in dem_paths], r=2))
+    # Get the same combinations but with DEM paths instead.
     path_combinations = [(dem_paths[first], dem_paths[second]) for first, second in pair_combinations]
 
+    # Start a progress bar for the DEM coaligning
     progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
 
-    def coalign_dems(path_combination):
+    def coalign_dems(path_combination: Tuple[str, str]):
+        """Coalign two DEMs in one thread."""
         path_1, path_2 = path_combination
-        result = processing.coalign_dems(path_1, path_2)
+        result = processing.coalign_dems(reference_path=path_1, aligned_path=path_2)
         progress_bar.update()
 
         return result
 
+    # Coaling all DEM combinations
+    # The results variable is a list of transforms from pair1 to pair2
     with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
         results = list(executor.map(coalign_dems, path_combinations))
 
@@ -775,100 +791,149 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str]):
     # Run through each combination of stereo-pairs and try to coalign the DEMs
     progress_bar = tqdm(total=len(pair_combinations))
     for i, (pair_1, pair_2) in enumerate(pair_combinations):
+        # Update the progress bar description
         progress_bar.desc = f"Processing results for {pair_1} and {pair_2}"
+        # Exctract the corresponding result
         result = results[i]
         # Skip if coalignment was not possible
         if result is None:
             progress_bar.update()
             continue
 
+        # Skip if the coalignment fitness was poor. I think 10 is 10 m of offset
         if result["fitness"] > 10:
             progress_bar.update()
             print(f"{pair_1} to {pair_2} fitness exceeded threshold: {result['fitness']}")
             continue
 
-        # TODO: Use the alignment centroid to make points instead of a random tie point
-        # TODO: Add fitting threshold
-
-        # Load the first image in both stereo-pairs
-        # The first pair acts as reference and the second pair acts as aligned
-        # This only matters for the script here.
+        # Get the ICP centroid as a numpy array (x, y, z) and create tie points from it
         centroid = np.array([float(value) for value in result["centroid"].splitlines()])
+        # Offsets to change the centroid (first offsets the x coordinate, third offsets the y coordinate, etc.)
         offsets = [
             [1, 0, 0],
             [-1, 0, 0],
             [0, 1, 0],
             [0, -1, 0],
-            [0, 0, 1]
+            [0, 0, 0]
         ]
-        rows = [centroid + np.array(offset) * 30 for offset in offsets]
+        # Create rows for pandas DataFrames by multiplying the centroid with corresponding offsets
+        rows = [centroid + np.array(offset) * tie_group_radius for offset in offsets]
+        # Make an aligned point position DataFrame from the centroid-centered points
         aligned_point_positions = pd.DataFrame(data=rows, columns=["X", "Y", "Z"])
+        # Transform the points to the reference coordinates using the ICP transform
+        # The order of these may seem unintuitive (since the reference points are transformed, not vice versa)
+        # The transform is a "recipe" for how to get points from an aligned POV to a reference POV
+        # Therefore, by transforming the aligned points to a reference POV, we get the corresponding reference points.
         reference_point_positions = processing.transform_points(aligned_point_positions, result["composed"])
 
+        # print("{pair_1} to {pair_2}: centroid initial: \n: {initial}\n transformed: {transformed} \n diff: {diff}".format(pair_1=pair_1, pair_2=pair_2,
+        #                                                                                                                  initial=aligned_point_positions.iloc[-1], transformed=reference_point_positions.iloc[-1], diff=reference_point_positions.iloc[-1] - aligned_point_positions.iloc[-1]))
+
         def global_to_local(row: pd.Series) -> ms.Vector:
+            """Convert global coordinates in a pandas row to local coordinates."""
             global_coord = ms.Vector(row[["X", "Y", "Z"]].values)
 
+            # Transform it using the inverse transform matrix of the unprojected coordinate. Geez.
             local_coord = chunk.transform.matrix.inv().mulp(chunk.crs.unproject(global_coord))
 
+            # Make a new identical row, but with new values. This may be replaced by just new_row = list(local_coord)
             new_row = pd.Series(data=list(local_coord), index=["X", "Y", "Z"])
 
             return new_row
 
+        # Convert the point positions to local coordinates (so point projections can be made)
         local_aligned_positions = aligned_point_positions.apply(global_to_local, axis=1)
         local_reference_positions = reference_point_positions.apply(global_to_local, axis=1)
 
-        def projection_valid(camera: ms.Camera, projected_position: ms.Vector):
+        def is_projection_valid(camera: ms.Camera, projected_position: ms.Vector) -> bool:
+            """
+            Check if a camera projection is valid, e.g. if it's not outside the camera bounds.
+
+            param: camera: The camera to check the projection validity on.
+            param: projected_position: The pixel position of the projection to evaluate.
+
+            return: is_valid: If the projection seems valid or not.
+
+
+            """
             if projected_position is None:
                 return False
+            # Check if the pixel locations are negative (meaning it's invalid)
             if projected_position.x < 0 or projected_position.y < 0:
                 return False
 
+            # Check if the projected x position is bigger than the image width
             if projected_position.x > int(camera.photo.meta["File/ImageWidth"]):
                 return False
+            # Check if the projected y position is bigger than the image height
             if projected_position.y > int(camera.photo.meta["File/ImageHeight"]):
                 return False
 
+            # Assume that the projection is valid if it didn't fill any of the above criterai
             return True
 
-        @ statictypes.enforce
-        def find_good_image(pair: str, positions: pd.DataFrame) -> ms.Camera:
-            images = [camera for camera in chunk.cameras if pair in camera.group.label]
+        @statictypes.enforce
+        def find_good_camera(pair: str, positions: pd.DataFrame) -> ms.Camera:
+            """
+            Find a camera that can "see" all the given positions.
 
-            n_valid = {image: 0 for image in images}
+            param: pair: Which stereo-pair to look for a camera in.
+            param: positions: The positions to check if they are visible or not.
 
-            for image in images:
-                for i, position in positions.iterrows():
-                    projection = image.project(position[["X", "Y", "Z"]].values)
-                    if projection_valid(image, projection):
-                        n_valid[image] += 1
+            return: good_camera: A camera that can "see" all the given positions.
+            """
+            cameras_in_pair = [camera for camera in chunk.cameras if pair in camera.group.label]
 
-            best_image = max(n_valid, key=n_valid.get)
+            # Make a count for how many positions the camera can "see", starting at zero
+            n_valid = {camera: 0 for camera in cameras_in_pair}
 
-            return best_image
+            # Go through each camera and count the visibilities
+            for camera in cameras_in_pair:
+                # Go through each given position
+                for _, position in positions.iterrows():
+                    # Project the position onto the camera coordinate system
+                    projection = camera.project(position[["X", "Y", "Z"]].values)
+                    # Check if the projection was valid
+                    if is_projection_valid(camera, projection):
+                        n_valid[camera] += 1
 
-        reference_image = find_good_image(pair_1, local_reference_positions)
-        aligned_image = find_good_image(pair_2, local_aligned_positions)
+            # Find the image with the highest valid projection count
+            good_camera = max(n_valid, key=n_valid.get)  # type: ignore
 
-        for j in range(aligned_point_positions.shape[0]):
+            return good_camera
+
+        # Find two represenative cameras. One in the "reference" pair and one in the "aligned"
+        # Note that the "reference" and "aligned" labels only matter here, and have no effect on the result
+        reference_camera = find_good_camera(pair_1, local_reference_positions)
+        aligned_camera = find_good_camera(pair_2, local_aligned_positions)
+
+        # Go over each point position and make a Metashape marker from it if it's valid
+        for j in range(local_aligned_positions.shape[0]):
+            # Extract the reference and aligned point position
             reference_position = local_reference_positions.iloc[j]
             aligned_position = local_aligned_positions.iloc[j]
 
-            reference_projection = reference_image.project(reference_position)
-            aligned_projection = aligned_image.project(aligned_position)
+            # Project the positions
+            reference_projection = reference_camera.project(reference_position)
+            aligned_projection = aligned_camera.project(aligned_position)
 
-            if not projection_valid(reference_image, reference_projection):
+            # TODO: Check if this is still necessary (should be redundant due to find_good_camera())
+            # Double check that the projections are valid
+            if not is_projection_valid(reference_camera, reference_projection):
                 print(f"Reference projection was invalid: {reference_projection}")
                 continue
-            if not projection_valid(aligned_image, aligned_projection):
+            if not is_projection_valid(aligned_camera, aligned_projection):
                 print(f"Aligned projection invalid: {aligned_projection}")
                 continue
 
+            # Add a marker and set an appropriate label
             marker = chunk.addMarker()
-            error = round(float(result["fitness"]), 2)
+            error = round(float(result["fitness"]), 2)  # The "fitness" is presumed to be in m
             marker.label = f"tie_{pair_1}_to_{pair_2}_num_{j}_error_{error}_m"
 
-            marker.projections[reference_image] = ms.Marker.Projection(reference_projection, True)
-            marker.projections[aligned_image] = ms.Marker.Projection(aligned_projection, True)
+            # Set the projections
+            marker.projections[reference_camera] = ms.Marker.Projection(reference_projection, True)
+            marker.projections[aligned_camera] = ms.Marker.Projection(aligned_projection, True)
 
         progress_bar.update()
 

@@ -16,7 +16,7 @@ import statictypes
 
 from terra import files
 from terra.constants import CONSTANTS
-from terra.processing import inputs
+from terra.processing import inputs, main
 from terra.utilities import no_stdout
 
 CACHE_FILES = {
@@ -194,8 +194,17 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     # Create a bounds object to more explicitly handle bounds.
     Bounds = namedtuple("Bounds", ["x_min", "x_max", "y_min", "y_max"])
 
-    temp_dir = tempfile.TemporaryDirectory()
-    tempfiles = {os.path.splitext(filename)[0]: os.path.join(temp_dir.name, filename) for filename in [
+    #temp_dir = tempfile.TemporaryDirectory()
+    temp_dir = os.path.join(
+        os.path.dirname(reference_path),
+        "coalignment",
+        "_to_".join([
+            os.path.splitext(os.path.basename(reference_path))[0],
+            os.path.splitext(os.path.basename(aligned_path))[0]
+        ])
+    )
+    os.makedirs(temp_dir, exist_ok=True)
+    tempfiles = {os.path.splitext(filename)[0]: os.path.join(temp_dir, filename) for filename in [
         "reference_cropped.tif", "aligned_cropped.tif", "aligned_post_icp.tif", "result_meta.json"
     ]}
 
@@ -242,7 +251,7 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     aligned_original[aligned_original == nan_value] = np.nan
 
     # Get the resolution by dividing the real world width with the pixel width
-    resolution = (reference_bounds.x_max - reference_bounds.x_min) / reference_original.shape[1]
+    resolution: float = (reference_bounds.x_max - reference_bounds.x_min) / reference_original.shape[1]
 
     # Create new bounding coordinates that encompass both datasets
     new_bounds = Bounds(
@@ -288,6 +297,7 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     overlapping = np.logical_and(np.logical_not(np.isnan(reference)), np.logical_not(np.isnan(aligned)))
     # Buffer the mask to increase the likelyhood of including the correct values
     overlapping_buffered = scipy.ndimage.maximum_filter(overlapping, size=pixel_buffer, mode="constant")
+    overlapping_buffered = overlapping.copy()  # TODO: Remove this!
 
     # Filter the DEMs to only where they overlap
     reference[~overlapping_buffered] = np.nan
@@ -336,13 +346,13 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     [
         {
             "type": "readers.gdal",
-            "filename": "REFERENCE_FILENAME",
+            "filename": "REFERENCE_FILEPATH",
             "header": "Z",
             "tag": "A1"
         },
         {
             "type": "readers.gdal",
-            "filename": "ALIGNED_FILENAME",
+            "filename": "ALIGNED_FILEPATH",
             "header": "Z",
             "tag": "B1"
         },
@@ -361,14 +371,25 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
         {
             "inputs": ["A2", "B2"],
             "type": "filters.icp"
+        },
+        {
+            "type": "writers.gdal",
+            "filename": "OUTPUT_FILEPATH",
+            "resolution": RESOLUTION
         }
     ]
     '''
     # Run the pdal pipeline
-    result = run_pdal_pipeline(pdal_pipeline, parameters={
-        "REFERENCE_FILENAME": tempfiles["reference_cropped"],
-        "ALIGNED_FILENAME": tempfiles["aligned_cropped"],
-    })["stages"]["filters.icp"]
+    result = run_pdal_pipeline(
+        pipeline=pdal_pipeline,
+        parameters={
+            "REFERENCE_FILEPATH": tempfiles["reference_cropped"],
+            "ALIGNED_FILEPATH": tempfiles["aligned_cropped"],
+            "OUTPUT_FILEPATH": tempfiles["aligned_post_icp"],
+            "RESOLUTION": str(resolution),
+        },
+        output_metadata_file=tempfiles["result_meta"]
+    )["stages"]["filters.icp"]
 
     result["composed"] = result["composed"].replace("\n", " ")
 
@@ -428,9 +449,3 @@ def transform_points(points: pd.DataFrame, composed_transform: str, inverse: boo
     transformed_points = pd.read_csv(tempfiles["transformed_points"])
 
     return transformed_points
-
-
-if __name__ == "__main__":
-    result = coalign_dems("/home/erik/Projects/ETH/SwissTerra/temp/processing/rhone/temp/station_1666_local_dense_DEM.tif",
-                          "/home/erik/Projects/ETH/SwissTerra/temp/processing/rhone/temp/station_1668_local_dense_DEM.tif")
-    print(result)

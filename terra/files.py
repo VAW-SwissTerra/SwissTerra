@@ -7,6 +7,7 @@ from typing import Generator, List, Union
 
 import magic
 import statictypes
+import toml
 
 # Set the default input root directory
 INPUT_ROOT_DIRECTORY = "input"
@@ -50,6 +51,14 @@ INPUT_FILE_TYPES = {
 }
 
 
+# Retrieve the dataset tags
+DATASETS: List[str] = []
+for _filename in os.listdir(os.path.join(INPUT_ROOT_DIRECTORY, "dataset_metadata")):
+    extension, name = os.path.splitext(_filename)
+    if extension == ".toml":
+        DATASETS.append(name)
+
+
 def clear_cache() -> None:
     """Clear the cache (temp) directory."""
     if not os.path.isdir(TEMP_DIRECTORY):
@@ -57,12 +66,12 @@ def clear_cache() -> None:
     shutil.rmtree(TEMP_DIRECTORY)
 
 
-@statictypes.enforce
+@ statictypes.enforce
 def check_filetype(estimated_filetype: str, allowed_types: Union[str, List[str]]) -> bool:
     """
     Check if a file has an expected filetype.
 
-    param: estimated_filetype: The filetype that was estimated by magic. 
+    param: estimated_filetype: The filetype that was estimated by magic.
     param: allowed_types: A string or a list of strings to check.
 
     return: correct: Whether the filetype contains the correct keyword.
@@ -187,3 +196,16 @@ def list_image_paths() -> Generator[str, None, None]:
 def list_image_meta_paths() -> Generator[str, None, None]:
     """List each image metadata path in the input directory."""
     return list_input_directory(INPUT_DIRECTORIES["image_meta_dir"])
+
+
+def read_dataset_meta(dataset: str):
+    dataset_meta = toml.load(os.path.join(INPUT_ROOT_DIRECTORY, "dataset_metadata", f"{dataset}.toml"))
+
+    dataset_meta["tag"] = dataset
+    print(dataset_meta)
+
+    return dataset_meta
+
+
+if __name__ == "__main__":
+    read_dataset_meta("rhone")
