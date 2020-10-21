@@ -337,7 +337,7 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
     """
     with tqdm(total=len(pairs)) as progress_bar:
         for pair in pairs:
-            progress_bar.desc = f"Building dense clouds for {pair}"
+            progress_bar.desc = f"Building dense cloud for {pair}"
             for camera in chunk.cameras:
                 # Set it as enabled if the camera group label fits with the stereo pair label
                 camera.enabled = pair in camera.group.label
@@ -348,6 +348,7 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
                     chunk.buildDenseCloud(point_confidence=True)
                 except Exception as exception:
                     if "Zero resolution" in str(exception):
+                        progress_bar.update()
                         continue
                     raise exception
 
@@ -751,15 +752,15 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     return dem_filepaths
 
 
-def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], tie_group_radius: float = 30.0):
+def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 13.0, tie_group_radius: float = 30.0):
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.
 
     param: chunk: The chunk to analyse.
     param: pairs: The stereo-pairs to coaling.
+    param: max_fitness: The maximum allowed PDAL ICP fitness parameters (presumed to be C2C distance in m)
     param: tie_group_radius: The distance of all tie points from the centroid of the alignment.
     """
-
     if chunk.meta["dataset"] is None:
         raise ValueError("Chunk dataset meta is undefined")
     # Build DEMs to subsequently coalign
@@ -801,7 +802,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], tie_group_radius: fl
             continue
 
         # Skip if the coalignment fitness was poor. I think 10 is 10 m of offset
-        if result["fitness"] > 10:
+        if result["fitness"] > max_fitness:
             progress_bar.update()
             print(f"{pair_1} to {pair_2} fitness exceeded threshold: {result['fitness']}")
             continue
@@ -824,7 +825,8 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], tie_group_radius: fl
         # The order of these may seem unintuitive (since the reference points are transformed, not vice versa)
         # The transform is a "recipe" for how to get points from an aligned POV to a reference POV
         # Therefore, by transforming the aligned points to a reference POV, we get the corresponding reference points.
-        reference_point_positions = processing.transform_points(aligned_point_positions, result["composed"])
+        reference_point_positions = processing.transform_points(
+            aligned_point_positions, result["composed"], inverse=True)
 
         # print("{pair_1} to {pair_2}: centroid initial: \n: {initial}\n transformed: {transformed} \n diff: {diff}".format(pair_1=pair_1, pair_2=pair_2,
         #                                                                                                                  initial=aligned_point_positions.iloc[-1], transformed=reference_point_positions.iloc[-1], diff=reference_point_positions.iloc[-1] - aligned_point_positions.iloc[-1]))
