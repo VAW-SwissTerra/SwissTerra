@@ -326,7 +326,7 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
 
 @statictypes.convert
 def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Quality.HIGH,
-                       filtering: Filtering = Filtering.AGGRESSIVE) -> None:
+                       filtering: Filtering = Filtering.AGGRESSIVE, all_together: bool = False) -> None:
     """
     Generate dense clouds for all stereo-pairs in a given chunk.
 
@@ -334,39 +334,50 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
     param: pairs: A list of the stereo-pairs to process.
     param: quality: The quality of the dense cloud.
     param: filtering: The dense cloud filtering setting.
+    param: all_together: Whether to process every stereo-pair together.
     """
-    with tqdm(total=len(pairs)) as progress_bar:
-        for pair in pairs:
-            progress_bar.desc = f"Building dense cloud for {pair}"
-            for camera in chunk.cameras:
-                # Set it as enabled if the camera group label fits with the stereo pair label
-                camera.enabled = pair in camera.group.label
 
-            with no_stdout():
-                chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
-                try:
-                    chunk.buildDenseCloud(point_confidence=True)
-                except Exception as exception:
-                    if "Zero resolution" in str(exception):
-                        progress_bar.update()
-                        continue
-                    raise exception
+    def generate_dense_cloud(cameras: List[ms.Camera], label) -> None:
+        for camera in chunk.cameras:
+            # Set it as enabled if the camera group label fits with the stereo pair label
+            camera.enabled = camera in cameras
 
-            chunk.dense_cloud.label = pair
+        with no_stdout():
+            chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
+            try:
+                chunk.buildDenseCloud(point_confidence=True)
+            except Exception as exception:
+                if "Zero resolution" in str(exception):
+                    return
+                raise exception
+
+            chunk.dense_cloud.label = label
 
             # Remove all points with a low confidence
             chunk.dense_cloud.setConfidenceFilter(0, CONSTANTS.dense_cloud_min_confidence - 1)
             chunk.dense_cloud.removePoints(list(range(128)))
             chunk.dense_cloud.resetFilters()
 
-            # Unset the dense cloud as default to allow for more dense clouds to be constructed
-            chunk.dense_cloud = None
+    if all_together:
+        print("Generating dense cloud from all stereo-pairs")
+        generate_dense_cloud(chunk.cameras, label="all_pairs")
 
-            progress_bar.update()
+    else:
+        with tqdm(total=len(pairs), desc="Building dense clouds") as progress_bar:
+            for pair in pairs:
+                progress_bar.desc = f"Building dense cloud for {pair}"
+                progress_bar.update(n=0)  # Update the new text
 
-    # Reset the enabled flags
-    for camera in chunk.cameras:
-        camera.enabled = True
+                cameras_to_process = [camera for camera in chunk.cameras if pair in camera.group.label]
+                generate_dense_cloud(cameras_to_process, label=pair)
+                # Unset the dense cloud as default to allow for more dense clouds to be constructed
+                chunk.dense_cloud = None
+
+                progress_bar.update()
+
+        # Reset the enabled flags
+        for camera in chunk.cameras:
+            camera.enabled = True
 
 
 @statictypes.convert
@@ -736,6 +747,7 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
         """
         pair, filepath = pair_and_filepath
         progress_bar.desc = f"Generating DEMs for {pair}"
+        progress_bar.update(n=0)  # Update the text
         output_filepath = os.path.splitext(filepath)[0] + "_DEM.tif"
         if redo or not os.path.isfile(output_filepath):
             processing.generate_dem(filepath, output_dem_path=output_filepath,
@@ -942,14 +954,30 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
     progress_bar.close()
 
 
-def optimize_cameras(chunk: ms.Chunk) -> None:
+def optimize_cameras(chunk: ms.Chunk, fixed_sensors: bool = False) -> None:
     """
     Optimize the chunk camera alignment.
     """
+    parameters = ["fit_f", "fit_cx", "fit_cy", "fit_b1", "fit_b2",
+                  "fit_k1", "fit_k2", "fit_k3", "fit_k4", "fit_p1", "fit_p2"]
 
-    with no_stdout():
-        chunk.optimizeCameras(fit_f=True, fit_cx=True, fit_cy=True, fit_b1=True, fit_b2=True,
-                              fit_k1=True, fit_k2=True, fit_k3=True, fit_k4=True, fit_p1=True, fit_p2=True)
+    if fixed_sensors:
+        old_fixed_flags = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
+        old_calibrations = {sensor: sensor.calibration.copy() for sensor in chunk.sensors}
+
+        for sensor in chunk.sensors:
+            sensor.user_calib = old_calibrations[sensor]
+            sensor.fixed_calibration = True
+
+        with no_stdout():
+            chunk.optimizeCameras(**{key: False for key in parameters})
+
+        for sensor in chunk.sensors:
+            sensor.fixed_calibration = old_fixed_flags[sensor]
+
+    else:
+        with no_stdout():
+            chunk.optimizeCameras(**{key: True for key in parameters})
 
 
 def remove_bad_markers(chunk, marker_error_threshold: float = 4.0):

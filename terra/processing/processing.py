@@ -179,7 +179,7 @@ def match_asift(filepath1: str, filepath2: str, verbose: bool = True) -> pd.Data
     return matches
 
 
-def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_value=-9999) -> Optional[Dict[str, str]]:
+def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_value=-9999) -> Optional[Dict[str, str]]:
     """
     Align two DEMs and return the ICP result.
 
@@ -203,7 +203,6 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
             os.path.splitext(os.path.basename(aligned_path))[0]
         ])
     )
-    os.makedirs(temp_dir, exist_ok=True)
     tempfiles = {os.path.splitext(filename)[0]: os.path.join(temp_dir, filename) for filename in [
         "reference_cropped.tif", "aligned_cropped.tif", "aligned_post_icp.tif", "result_meta.json"
     ]}
@@ -245,6 +244,10 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     dtype = np.float32
     reference_original = cv2.imread(reference_path, cv2.IMREAD_ANYDEPTH).astype(dtype)
     aligned_original = cv2.imread(aligned_path, cv2.IMREAD_ANYDEPTH).astype(dtype)
+
+    # Check that the DEMs were read correctly
+    if reference_original is None or aligned_original is None:
+        return None
 
     # Set the nan_value to actual nans
     reference_original[reference_original == nan_value] = np.nan
@@ -297,13 +300,12 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
     overlapping = np.logical_and(np.logical_not(np.isnan(reference)), np.logical_not(np.isnan(aligned)))
     # Buffer the mask to increase the likelyhood of including the correct values
     overlapping_buffered = scipy.ndimage.maximum_filter(overlapping, size=pixel_buffer, mode="constant")
-    overlapping_buffered = overlapping.copy()  # TODO: Remove this!
 
     # Filter the DEMs to only where they overlap
     reference[~overlapping_buffered] = np.nan
     aligned[~overlapping_buffered] = np.nan
 
-    if np.all(np.isnan(reference)) or np.all(np.isnan(aligned)):
+    if np.all(np.isnan(reference)) or np.all(np.isnan(aligned)) or np.any(np.isinf(reference)) or np.any(np.isinf(aligned)):
         return None
 
     def write_raster(filepath: str, heights: np.ndarray):
@@ -323,8 +325,13 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=10, nan_va
             outfile.write(heights, 1)
 
     # Write the cropped DEMs
+    os.makedirs(temp_dir, exist_ok=True)
     write_raster(tempfiles["reference_cropped"], reference)
     write_raster(tempfiles["aligned_cropped"], aligned)
+
+    # Check that rasters were written
+    if len(os.listdir(temp_dir)) == 0:
+        return None
 
     def validate_raster(filepath: str) -> bool:
         with rio.open(filepath) as dataset:

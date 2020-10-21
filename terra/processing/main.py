@@ -9,6 +9,7 @@ import statictypes
 from terra import files
 from terra.constants import CONSTANTS  # pylint: disable=no-name-in-module
 from terra.processing import inputs, metashape
+from terra.utilities import no_stdout
 
 
 @statictypes.enforce
@@ -41,45 +42,44 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     metashape.save_document(doc)
 
     # TODO: Remove this when ICP seems to be working.
-#    for marker in chunk.markers:
-#        if "Tie " in marker.label:
-#            break
-#    else:
-#        chunk.importMarkers(os.path.join(files.INPUT_DIRECTORIES["rhone_meta"], "tie_points.xml"))
-#        metashape.optimize_cameras(chunk)
+    if False:
+        for marker in chunk.markers:
+            if "Tie " in marker.label:
+                break
+        else:
+            chunk.importMarkers(os.path.join(files.INPUT_DIRECTORIES["rhone_meta"], "tie_points.xml"))
+            metashape.optimize_cameras(chunk)
 
-    metashape.save_document(doc)
+#    metashape.save_document(doc)
 
     # Check which pairs do not yet have a dense cloud
     unfinished_pairs = metashape.get_unfinished_pairs(chunk, metashape.Step.DENSE_CLOUD)
     # Make missing dense clouds
     if len(unfinished_pairs) > 0:
-        metashape.build_dense_clouds(chunk, pairs=unfinished_pairs, quality=metashape.Quality.HIGH,
+        metashape.build_dense_clouds(chunk, pairs=unfinished_pairs, quality=metashape.Quality.ULTRA,
                                      filtering=metashape.Filtering.MILD)
     metashape.save_document(doc)
 
     # Coalign stereo-pair DEMs with each other and generate markers from their alignment
     metashape.coalign_stereo_pairs(chunk, pairs=pairs)
-    metashape.optimize_cameras(chunk)
+    metashape.optimize_cameras(chunk, fixed_sensors=True)
+    metashape.remove_bad_markers(chunk, marker_error_threshold=3)
+    metashape.optimize_cameras(chunk, fixed_sensors=True)
 
-    shutil.rmtree(os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], "coalignment"))
+    metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.ULTRA,
+                                 filtering=metashape.Filtering.MILD, all_together=True)
 
-    for marker in chunk.markers:
-        if marker.type == ms.Marker.Type.Fiducial:
-            continue
-        chunk.remove(marker)
+    print("Generating DEM")
+    with no_stdout():
+        chunk.buildDem()
 
-    metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.HIGH, filtering=metashape.Filtering.MILD)
-    metashape.coalign_stereo_pairs(chunk, pairs=pairs)
-    metashape.optimize_cameras(chunk)
-
-    metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.HIGH, filtering=metashape.Filtering.MILD)
+    # metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.HIGH,
+    #                             filtering=metashape.Filtering.MILD)
 
     # Run a bundle adjustment with these new markers.
     # metashape.optimize_cameras(chunk)
 
     # Remove markers that still have an unreasonable error and run another bundle adjustment.
-    # metashape.remove_bad_markers(chunk)
     # metashape.optimize_cameras(chunk)
     metashape.save_document(doc)
     return
