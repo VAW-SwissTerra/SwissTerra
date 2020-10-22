@@ -764,7 +764,7 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     return dem_filepaths
 
 
-def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 13.0, tie_group_radius: float = 30.0):
+def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 13.0, tie_group_radius: float = 30.0, marker_pixel_accuracy=4.0):
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.
 
@@ -772,6 +772,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
     param: pairs: The stereo-pairs to coaling.
     param: max_fitness: The maximum allowed PDAL ICP fitness parameters (presumed to be C2C distance in m)
     param: tie_group_radius: The distance of all tie points from the centroid of the alignment.
+    param: marker_pixel_accuracy: The approximate accuracy in pixels to give to Metashape.
     """
     if chunk.meta["dataset"] is None:
         raise ValueError("Chunk dataset meta is undefined")
@@ -840,9 +841,6 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
         reference_point_positions = processing.transform_points(
             aligned_point_positions, result["composed"], inverse=True)
 
-        # print("{pair_1} to {pair_2}: centroid initial: \n: {initial}\n transformed: {transformed} \n diff: {diff}".format(pair_1=pair_1, pair_2=pair_2,
-        #                                                                                                                  initial=aligned_point_positions.iloc[-1], transformed=reference_point_positions.iloc[-1], diff=reference_point_positions.iloc[-1] - aligned_point_positions.iloc[-1]))
-
         def global_to_local(row: pd.Series) -> ms.Vector:
             """Convert global coordinates in a pandas row to local coordinates."""
             global_coord = ms.Vector(row[["X", "Y", "Z"]].values)
@@ -887,7 +885,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             return True
 
         @statictypes.enforce
-        def find_good_camera(pair: str, positions: pd.DataFrame) -> ms.Camera:
+        def find_good_cameras(pair: str, positions: pd.DataFrame) -> List[ms.Camera]:
             """
             Find a camera that can "see" all the given positions.
 
@@ -911,15 +909,19 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
                     if is_projection_valid(camera, projection):
                         n_valid[camera] += 1
 
-            # Find the image with the highest valid projection count
-            good_camera = max(n_valid, key=n_valid.get)  # type: ignore
+            # Find the cameras with valid at least n-1 projections valid (5 positions => 4 valid projections)
+            good_cameras = [camera for camera, n_valid_projections in n_valid.items(
+            ) if n_valid_projections >= (positions.shape[0] - 1)]
 
-            return good_camera
+            return good_cameras
 
         # Find two represenative cameras. One in the "reference" pair and one in the "aligned"
         # Note that the "reference" and "aligned" labels only matter here, and have no effect on the result
-        reference_camera = find_good_camera(pair_1, local_reference_positions)
-        aligned_camera = find_good_camera(pair_2, local_aligned_positions)
+        reference_cameras = find_good_cameras(pair_1, local_reference_positions)
+        aligned_cameras = find_good_cameras(pair_2, local_aligned_positions)
+
+        # Set the marker pixel accuracy
+        chunk.marker_projection_accuracy = marker_pixel_accuracy
 
         # Go over each point position and make a Metashape marker from it if it's valid
         for j in range(local_aligned_positions.shape[0]):
@@ -928,15 +930,15 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             aligned_position = local_aligned_positions.iloc[j]
 
             # Project the positions
-            reference_projection = reference_camera.project(reference_position)
-            aligned_projection = aligned_camera.project(aligned_position)
+            reference_projection = [camera.project(reference_position) for camera in reference_cameras]
+            aligned_projection = [camera.project(aligned_position) for camera in align_cameras]
 
             # TODO: Check if this is still necessary (should be redundant due to find_good_camera())
             # Double check that the projections are valid
-            if not is_projection_valid(reference_camera, reference_projection):
+            if all(not is_projection_valid(camera, reference_projection) for camera in reference_cameras):
                 print(f"Reference projection was invalid: {reference_projection}")
                 continue
-            if not is_projection_valid(aligned_camera, aligned_projection):
+            if all(not is_projection_valid(camera, aligned_projection) for camera in aligned_cameras):
                 print(f"Aligned projection invalid: {aligned_projection}")
                 continue
 
@@ -946,8 +948,11 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             marker.label = f"tie_{pair_1}_to_{pair_2}_num_{j}_error_{error}_m"
 
             # Set the projections
-            marker.projections[reference_camera] = ms.Marker.Projection(reference_projection, True)
-            marker.projections[aligned_camera] = ms.Marker.Projection(aligned_projection, True)
+            for reference_camera in reference_cameras:
+                marker.projections[reference_camera] = ms.Marker.Projection(reference_projection, True)
+
+            for aligned_camera in aligned_cameras:
+                marker.projections[aligned_camera] = ms.Marker.Projection(aligned_projection, True)
 
         progress_bar.update()
 
