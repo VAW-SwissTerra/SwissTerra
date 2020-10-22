@@ -45,10 +45,26 @@ Run `terra data check` to validate that all files can be located.
 ## Usage
 Run `terra -h` to see the how to run the program.
 
-1. Set up a dataset (TODO: ADD INSTRUCTIONS ON HOW TO DO THIS)
+1. Set up a dataset ([see below for instructions](#datasets)), hereby named `DATASET`.
 
-2. `terra files check`: See that all files can be found
+2. `terra files check`: See that all files can be found.
 
 3. `terra processing DATASET generate-inputs`: Generate all inputs with default settings.
 
-4. `terra processing DATASET run`: Start the main pipeline
+4. `terra processing DATASET run`: Start the main pipeline.
+
+
+### Datasets
+A dataset is defined through a `.toml` file in a `datasets/` subfolder of the input main input folder.
+Below is an example of the Rhonegletscher subset, with the path: `$SWISSTERRA_INPUT_DIR/datasets/rhone.toml`:
+
+```toml
+name = "Rhonegletscher"
+[bounds]
+	left = 671000
+	right = 676000
+	top = 166000
+	bottom = 156000
+```
+Images are subsequently extracted from the bounds specified in the dataset.
+The key used to substitute `DATASET` in [Usage](#usage) is the name of the dataset file without the extension, e.g. `rhone`.

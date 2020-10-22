@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import statictypes
 from tqdm import tqdm
 
 from terra import files
@@ -70,6 +71,7 @@ def read_metadata() -> pd.DataFrame:
 
     return: metadata: The metadata for all images.
     """
+    # TODO: Add exception handling if the pickle doesn't exist
 
     metadata = pd.read_pickle(CACHE_FILES["image_meta"])
 
@@ -186,6 +188,24 @@ def get_matching_candidates(angle_threshold: float = 45.0, distance_threshold: f
     pairs = get_filename(fulfilling_all)
 
     return pairs
+
+
+@statictypes.enforce
+def get_cameras_from_bounds(left: float, right: float, top: float, bottom: float) -> np.ndarray:
+    """
+    Extract every camera that can be found in the specified bounds.
+    """
+    image_metadata = read_metadata()
+
+    fullfilling_left = image_metadata["easting"] > left
+    fullfilling_right = image_metadata["easting"] < right
+    fullfilling_top = image_metadata["northing"] < top
+    fullfilling_bottom = image_metadata["northing"] > bottom
+
+    meta_within_bounds = image_metadata[fullfilling_left & fullfilling_right & fullfilling_top & fullfilling_bottom]
+    cameras_within_bounds = meta_within_bounds["Image file"].values
+
+    return cameras_within_bounds
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import os
 import pathlib
 import shutil
 from collections import namedtuple
-from typing import Generator, List, Union
+from typing import Any, Dict, Generator, List, Union
 
 import magic
 import statictypes
@@ -50,7 +50,7 @@ INPUT_FILE_TYPES = {
 
 # Retrieve the dataset tags
 DATASETS: List[str] = []
-for _filename in os.listdir(os.path.join(INPUT_ROOT_DIRECTORY, "dataset_metadata")):
+for _filename in os.listdir(os.path.join(INPUT_ROOT_DIRECTORY, "datasets")):
     name, extension = os.path.splitext(_filename)
     if extension == ".toml":
         DATASETS.append(name)
@@ -195,8 +195,10 @@ def list_image_meta_paths() -> Generator[str, None, None]:
     return list_input_directory(INPUT_DIRECTORIES["image_meta_dir"])
 
 
-def read_dataset_meta(dataset: str):
-    dataset_meta = toml.load(os.path.join(INPUT_ROOT_DIRECTORY, "dataset_metadata", f"{dataset}.toml"))
+@statictypes.enforce
+def read_dataset_meta(dataset: str) -> Dict[str, Any]:
+    filepath = os.path.join(INPUT_ROOT_DIRECTORY, "datasets", f"{dataset}.toml")
+    dataset_meta = toml.load(filepath)
 
     dataset_meta["tag"] = dataset
 

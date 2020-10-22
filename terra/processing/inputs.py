@@ -15,16 +15,33 @@ CACHE_FILES = {
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "processing")
 
-for dataset in DATASETS:
-    CACHE_FILES[f"{dataset}_dir"] = os.path.join(TEMP_DIRECTORY, dataset)
-    CACHE_FILES[f"{dataset}_input_dir"] = os.path.join(CACHE_FILES[f"{dataset}_dir"], "input")
-    CACHE_FILES[f"{dataset}_camera_orientations"] = os.path.join(
-        CACHE_FILES[f"{dataset}_input_dir"], "camera_orientations.csv")
-    CACHE_FILES[f"{dataset}_temp_dir"] = os.path.join(CACHE_FILES[f"{dataset}_dir"], "temp")
+for _dataset in DATASETS:
+    CACHE_FILES[f"{_dataset}_dir"] = os.path.join(TEMP_DIRECTORY, _dataset)
+    CACHE_FILES[f"{_dataset}_input_dir"] = os.path.join(CACHE_FILES[f"{_dataset}_dir"], "input")
+    CACHE_FILES[f"{_dataset}_camera_orientations"] = os.path.join(
+        CACHE_FILES[f"{_dataset}_input_dir"], "camera_orientations.csv"
+    )
+    CACHE_FILES[f"{_dataset}_temp_dir"] = os.path.join(CACHE_FILES[f"{_dataset}_dir"], "temp")
 
 
-def get_dataset_filenames(dataset: str):
-    return open(files.INPUT_FILES[f"{dataset}_image_filenames"]).read().splitlines()
+def get_dataset_filenames(dataset: str) -> np.ndarray:
+    """
+    Get the image filenames of images that correspond to the dataset.
+
+    param: dataset: The name of the dataset.
+
+    return: dataset_filenames: The filenames corresponding to the dataset.
+    """
+    dataset_meta = files.read_dataset_meta(dataset)
+
+    dataset_filenames = metadata.image_meta.get_cameras_from_bounds(
+        left=float(dataset_meta["bounds"]["left"]),
+        right=float(dataset_meta["bounds"]["right"]),
+        top=float(dataset_meta["bounds"]["top"]),
+        bottom=float(dataset_meta["bounds"]["bottom"]),
+    )
+
+    return dataset_filenames
 
 
 def get_dataset_metadata(dataset: str) -> pd.DataFrame:
@@ -48,7 +65,7 @@ def get_dataset_metadata(dataset: str) -> pd.DataFrame:
 def export_camera_orientation_csv(dataset: str):
     image_metadata = get_dataset_metadata(dataset)
 
-    #image_metadata["label"] = image_metadata["Image file"].str.replace(".tif", "")
+    # image_metadata["label"] = image_metadata["Image file"].str.replace(".tif", "")
     image_metadata.rename(columns={"Image file": "label"}, inplace=True)
 
     if not os.path.isdir(CACHE_FILES[f"{dataset}_input_dir"]):
