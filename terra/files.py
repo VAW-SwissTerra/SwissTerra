@@ -23,7 +23,6 @@ TEMP_DIRECTORY = "temp"
 INPUT_DIRECTORIES = {
     "image_dir": "images/",
     "image_meta_dir": "image_metadata/",
-    "rhone_meta": "dataset_metadata/rhone",
 }
 # Set the names of the input files (excluding the root)
 INPUT_FILES = {
@@ -32,7 +31,6 @@ INPUT_FILES = {
     "outlines_1935": "shapefiles/Glacierarea_1935_split.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
     "viewsheds": "shapefiles/V_TERRA_BGDI.shp",
-    "rhone_image_filenames": "dataset_metadata/rhone/image_filenames.txt",
 }
 # Prepend the directory and file paths with the input root directory path.
 INPUT_DIRECTORIES = {key: os.path.join(INPUT_ROOT_DIRECTORY, value) for key, value in INPUT_DIRECTORIES.items()}
@@ -46,15 +44,14 @@ INPUT_FILE_TYPES = {
     "camera_locations": "ESRI Shapefile",
     "image_dir": "TIFF image",
     "image_meta_dir": "text",
-    "rhone_meta": ["text", "data"],
-    "rhone_image_filenames": "text",
+    "meta_file": ["text", "data"],
 }
 
 
 # Retrieve the dataset tags
 DATASETS: List[str] = []
 for _filename in os.listdir(os.path.join(INPUT_ROOT_DIRECTORY, "dataset_metadata")):
-    extension, name = os.path.splitext(_filename)
+    name, extension = os.path.splitext(_filename)
     if extension == ".toml":
         DATASETS.append(name)
 
@@ -202,10 +199,5 @@ def read_dataset_meta(dataset: str):
     dataset_meta = toml.load(os.path.join(INPUT_ROOT_DIRECTORY, "dataset_metadata", f"{dataset}.toml"))
 
     dataset_meta["tag"] = dataset
-    print(dataset_meta)
 
     return dataset_meta
-
-
-if __name__ == "__main__":
-    read_dataset_meta("rhone")

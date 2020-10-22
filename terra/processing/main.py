@@ -47,7 +47,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
             if "Tie " in marker.label:
                 break
         else:
-            chunk.importMarkers(os.path.join(files.INPUT_DIRECTORIES["rhone_meta"], "tie_points.xml"))
+            chunk.importMarkers(os.path.join(files.INPUT_ROOT_DIRECTORY, "dataset_metadata", "rhone", "tie_points.xml"))
             metashape.optimize_cameras(chunk)
 
 #    metashape.save_document(doc)

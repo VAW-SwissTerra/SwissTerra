@@ -6,7 +6,7 @@ import pandas as pd
 
 from terra import fiducials, files, metadata, preprocessing
 
-DATASETS = ["rhone", "full"]
+DATASETS = files.DATASETS + ["full"]
 
 
 CACHE_FILES = {

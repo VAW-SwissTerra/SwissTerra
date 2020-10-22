@@ -92,9 +92,8 @@ def parse_args():
     fiducials_parser.set_defaults(func=fiducials_commands)
 
     # Datasets. TODO: make these dynamic
-    choices = {
-        "rhone": "Process the Rhonegletscher data subset.",
-    }
+    datasets = {dataset: files.read_dataset_meta(dataset) for dataset in files.DATASETS}
+    choices = {dataset: "Process the {name} dataset".format(name=datasets[dataset]["name"]) for dataset in datasets}
     processing_parser = commands.add_parser("processing", formatter_class=argparse.RawTextHelpFormatter,
                                             help="Main data processing.", description="Main data processing")
     processing_parser.add_argument("dataset", help=generate_help_text(choices),
