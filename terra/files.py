@@ -81,24 +81,25 @@ def check_filetype(estimated_filetype: str, allowed_types: Union[str, List[str]]
 
 
 def remove_locks() -> None:
-    from terra import processing
+    """Remove Metashape 'lock' files that persist after a crash"""
+    from terra import processing  # TODO: Check why this is needed here (probably circular imports)
 
-    if not os.path.isdir(processing.inputs.TEMP_DIRECTORY):
-        print("No lockfiles present")
-        return
+    removal_count = 0
 
-    datasets = os.listdir(processing.inputs.TEMP_DIRECTORY)
-    if len(datasets) == 0:
-        print("No lockfiles present")
-        return
-
-    for dataset in datasets:
+    for dataset in DATASETS:
         dataset_root = processing.inputs.CACHE_FILES[f"{dataset}_dir"]
         lockfile_path = os.path.join(dataset_root, f"{dataset}.files", "lock")
 
         if os.path.isfile(lockfile_path):
             print(f"Found {lockfile_path}. Removing.")
             os.remove(lockfile_path)
+            removal_count += 1
+
+    if removal_count > 0:
+        print(f"Removed {removal_count} lockfiles")
+    else:
+        print("No lockfiles present")
+
 
 
 # TODO: Make this more usable
@@ -108,6 +109,8 @@ def list_cache() -> None:
         print("No cache present")
         return
     for root_dir, _, filenames in os.walk(TEMP_DIRECTORY):
+        if root_dir.endswith(".files"):  # If it's a Metashape project directory
+            continue
         for filename in filenames:
             print(os.path.join(root_dir, filename))
 
@@ -197,6 +200,13 @@ def list_image_meta_paths() -> Generator[str, None, None]:
 
 @statictypes.enforce
 def read_dataset_meta(dataset: str) -> Dict[str, Any]:
+    """
+    Read the metadata toml file of a dataset.
+
+    param: dataset: The name of the dataset (aka its filename: dataset.toml)
+
+    return: dataset_meta: A dictionary of the properties of a dataset
+    """
     filepath = os.path.join(INPUT_ROOT_DIRECTORY, "datasets", f"{dataset}.toml")
     dataset_meta = toml.load(filepath)
 

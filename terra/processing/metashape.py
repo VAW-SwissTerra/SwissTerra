@@ -106,7 +106,8 @@ def load_document(dataset: str) -> ms.Document:
         doc.open(CACHE_FILES[f"{dataset}_metashape_project"])
 
     if doc.read_only:
-        raise AssertionError("The loaded document is in read-only mode. Is it open? Remove lock file if not.")
+        raise AssertionError("The loaded document is in read-only mode. Is it open?\
+                Remove lock file if not using 'terra cache remove-locks'.")
 
     doc.meta["dataset"] = dataset
 
