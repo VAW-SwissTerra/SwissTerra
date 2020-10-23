@@ -2,6 +2,7 @@
 import ctypes
 import io
 import os
+import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -88,3 +89,11 @@ class ConstantType:
     def __setitem__(self, key, value):
         """Override the Constants['key'] = value action."""
         self.raise_readonly_error(key, value)
+
+
+@statictypes.enforce
+def notify(message: str) -> None:
+    """
+    Send a notification to the current user.
+    """
+    subprocess.run(["notify-send", message], check=True)

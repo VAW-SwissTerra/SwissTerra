@@ -9,7 +9,7 @@ import statictypes
 from terra import files
 from terra.constants import CONSTANTS  # pylint: disable=no-name-in-module
 from terra.processing import inputs, metashape
-from terra.utilities import no_stdout
+from terra.utilities import no_stdout, notify
 
 
 @statictypes.enforce
@@ -42,13 +42,22 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     metashape.save_document(doc)
 
     # TODO: Remove this when ICP seems to be working.
-    if False:
+    # Import reference markers and fit the camera model
+    if True:
         for marker in chunk.markers:
             if "Tie " in marker.label:
                 break
         else:
-            chunk.importMarkers(os.path.join(files.INPUT_ROOT_DIRECTORY, "dataset_metadata", "rhone", "tie_points.xml"))
+            chunk.importMarkers(os.path.join(files.INPUT_ROOT_DIRECTORY, "datasets", "rhone", "tie_points.xml"))
             metashape.optimize_cameras(chunk)
+
+    # Remove the reference markers but keep the camera model fixed onward.
+    if True:
+        for marker in chunk.markers:
+            if "Tie " in marker.label:
+                chunk.remove(marker)
+
+    metashape.optimize_cameras(chunk, fixed_sensors=True)
 
 #    metashape.save_document(doc)
 
@@ -61,12 +70,12 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     metashape.save_document(doc)
 
     # Coalign stereo-pair DEMs with each other and generate markers from their alignment
-    metashape.coalign_stereo_pairs(chunk, pairs=pairs)
+    metashape.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
     metashape.optimize_cameras(chunk, fixed_sensors=True)
     metashape.remove_bad_markers(chunk, marker_error_threshold=3)
     metashape.optimize_cameras(chunk, fixed_sensors=True)
 
-    metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.ULTRA,
+    metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.HIGH,
                                  filtering=metashape.Filtering.MILD, all_together=True)
 
     print("Generating DEM")
@@ -82,6 +91,8 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     # Remove markers that still have an unreasonable error and run another bundle adjustment.
     # metashape.optimize_cameras(chunk)
     metashape.save_document(doc)
+
+    notify(f"{dataset} finished")
     return
 
     # Rebuild the dense clouds with the proper pose

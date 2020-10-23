@@ -839,7 +839,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
         # The transform is a "recipe" for how to get points from an aligned POV to a reference POV
         # Therefore, by transforming the aligned points to a reference POV, we get the corresponding reference points.
         reference_point_positions = processing.transform_points(
-            aligned_point_positions, result["composed"], inverse=True)
+            aligned_point_positions, result["composed"], inverse=False)
 
         def global_to_local(row: pd.Series) -> ms.Vector:
             """Convert global coordinates in a pandas row to local coordinates."""
@@ -930,17 +930,18 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             aligned_position = local_aligned_positions.iloc[j]
 
             # Project the positions
-            reference_projection = [camera.project(reference_position) for camera in reference_cameras]
-            aligned_projection = [camera.project(aligned_position) for camera in align_cameras]
+            reference_projections = [camera.project(reference_position) for camera in reference_cameras]
+            aligned_projections = [camera.project(aligned_position) for camera in aligned_cameras]
 
-            # TODO: Check if this is still necessary (should be redundant due to find_good_camera())
+            # TODO: Check if this is still necessary (should be redundant due to find_good_cameras())
             # Double check that the projections are valid
-            if all(not is_projection_valid(camera, reference_projection) for camera in reference_cameras):
-                print(f"Reference projection was invalid: {reference_projection}")
-                continue
-            if all(not is_projection_valid(camera, aligned_projection) for camera in aligned_cameras):
-                print(f"Aligned projection invalid: {aligned_projection}")
-                continue
+            for label, cameras, projections in [
+                    ("Reference", reference_cameras, reference_projections),
+                    ("Aligned", aligned_cameras, aligned_projections)
+            ]:
+                for camera, projection in zip(cameras, projections):
+                    if not is_projection_valid(camera, projection):
+                        print(f"{label} projection was invalid: {projection}")
 
             # Add a marker and set an appropriate label
             marker = chunk.addMarker()
@@ -948,11 +949,13 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             marker.label = f"tie_{pair_1}_to_{pair_2}_num_{j}_error_{error}_m"
 
             # Set the projections
-            for reference_camera in reference_cameras:
-                marker.projections[reference_camera] = ms.Marker.Projection(reference_projection, True)
+            for cameras, projections in [
+                    (reference_cameras, reference_projections),
+                    (aligned_cameras, aligned_projections)
+            ]:
 
-            for aligned_camera in aligned_cameras:
-                marker.projections[aligned_camera] = ms.Marker.Projection(aligned_projection, True)
+                for camera, projection in zip(cameras, projections):
+                    marker.projections[camera] = ms.Marker.Projection(projection, True)
 
         progress_bar.update()
 
@@ -962,25 +965,40 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
 def optimize_cameras(chunk: ms.Chunk, fixed_sensors: bool = False) -> None:
     """
     Optimize the chunk camera alignment.
+
+    param: chunk: The chunk whose camera alignment should be optimized.
+    param: fixed_sensors: Whether to temporarily fix the sensor values on optimization.
     """
+    # Parameters to either solve for or not to solve for in camera optimization
     parameters = ["fit_f", "fit_cx", "fit_cy", "fit_b1", "fit_b2",
                   "fit_k1", "fit_k2", "fit_k3", "fit_k4", "fit_p1", "fit_p2"]
 
     if fixed_sensors:
+        # Get the initial values for the user calibration, fixed flag, and adjusted calibration.
+        # Get the NoneType if the calibration doesn't exist, otherwise copy the calibration.
+        old_initial_calibrations = {
+            sensor: sensor.user_calib if not sensor.user_calib else sensor.user_calib.copy() for sensor in chunk.sensors
+        }
         old_fixed_flags = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
         old_calibrations = {sensor: sensor.calibration.copy() for sensor in chunk.sensors}
 
+        # Set the adjusted calibration to be the user calibration (to use as fixed) and then fix the calibration.
         for sensor in chunk.sensors:
             sensor.user_calib = old_calibrations[sensor]
             sensor.fixed_calibration = True
 
+        # Optimize cameras with all optimization parameters turned off.
         with no_stdout():
             chunk.optimizeCameras(**{key: False for key in parameters})
 
+        # Return the fixed flags and the user calibration to their initial values.
         for sensor in chunk.sensors:
             sensor.fixed_calibration = old_fixed_flags[sensor]
+            sensor.user_calib = old_initial_calibrations[sensor]
 
+    # If sensors should not be fixed.
     else:
+        # Optimize cameras with all parameters turned on.
         with no_stdout():
             chunk.optimizeCameras(**{key: True for key in parameters})
 
@@ -988,6 +1006,11 @@ def optimize_cameras(chunk: ms.Chunk, fixed_sensors: bool = False) -> None:
 def remove_bad_markers(chunk, marker_error_threshold: float = 4.0):
     """
     Remove every marker in the chunk that has is above the reprojection threshold.
+
+    If an ICP tie point is too high, all of its family members will be removed as well.
+
+    param: chunk: The chunk to analyse.
+    param: marker_error_threshold: The marker reprojection error threshold to accept.
     """
     # Get the rms reprojection error for each marker
     errors = get_rms_marker_reprojection_errors(chunk.markers)

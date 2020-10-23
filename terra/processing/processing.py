@@ -194,7 +194,7 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
     # Create a bounds object to more explicitly handle bounds.
     Bounds = namedtuple("Bounds", ["x_min", "x_max", "y_min", "y_max"])
 
-    #temp_dir = tempfile.TemporaryDirectory()
+    # temp_dir = tempfile.TemporaryDirectory()
     temp_dir = os.path.join(
         os.path.dirname(reference_path),
         "coalignment",
@@ -305,7 +305,12 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
     reference[~overlapping_buffered] = np.nan
     aligned[~overlapping_buffered] = np.nan
 
-    if np.all(np.isnan(reference)) or np.all(np.isnan(aligned)) or np.any(np.isinf(reference)) or np.any(np.isinf(aligned)):
+    if any([
+            # Check if all values are nan
+            np.all(np.isnan(reference)), np.all(np.isnan(aligned)),
+            # Check if it's all extreme values (basically +- inf).
+            np.all(np.abs(reference) > 1e20), np.all(np.abs(aligned) > 1e20)
+    ]):
         return None
 
     def write_raster(filepath: str, heights: np.ndarray):
@@ -348,7 +353,6 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
             return None
 
     # Read the datasets (A1, B1), filter out nans (A2, B2) and then run ICP
-    # TODO: Maybe remove the output raster
     pdal_pipeline = '''
     [
         {
