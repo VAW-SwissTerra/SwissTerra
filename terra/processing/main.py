@@ -56,10 +56,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
         for marker in chunk.markers:
             if "Tie " in marker.label:
                 chunk.remove(marker)
-
     metashape.optimize_cameras(chunk, fixed_sensors=True)
-
-#    metashape.save_document(doc)
 
     # Check which pairs do not yet have a dense cloud
     unfinished_pairs = metashape.get_unfinished_pairs(chunk, metashape.Step.DENSE_CLOUD)
