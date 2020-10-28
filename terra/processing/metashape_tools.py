@@ -18,7 +18,7 @@ from tqdm import tqdm
 from terra import fiducials, files, metadata
 from terra.constants import CONSTANTS
 from terra.preprocessing import masks
-from terra.processing import inputs, processing
+from terra.processing import inputs, processing_tools
 from terra.utilities import no_stdout
 
 CACHE_FILES = {}
@@ -413,7 +413,7 @@ def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
 
         param: cloud_and_dem_paths: A tuple of (dense_cloud_path, dem_path).
         """
-        processing.generate_dem(*cloud_and_dem_paths)
+        processing_tools.generate_dem(*cloud_and_dem_paths)
         progress_bar.update()
 
     # Generate DEMs for all point clouds in multiple threads.
@@ -638,7 +638,7 @@ def get_asift_markers(chunk):
         filepath1 = os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename1)
         filepath2 = os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename2)
 
-        matches = processing.match_asift(filepath1, filepath2, verbose=False)
+        matches = processing_tools.match_asift(filepath1, filepath2, verbose=False)
 
         for i, match in matches.iterrows():
             marker = chunk.addMarker()
@@ -751,8 +751,8 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
         progress_bar.update(n=0)  # Update the text
         output_filepath = os.path.splitext(filepath)[0] + "_DEM.tif"
         if redo or not os.path.isfile(output_filepath):
-            processing.generate_dem(filepath, output_dem_path=output_filepath,
-                                    resolution=resolution, interpolate_pixels=interpolate_pixels)
+            processing_tools.generate_dem(filepath, output_dem_path=output_filepath,
+                                          resolution=resolution, interpolate_pixels=interpolate_pixels)
 
         progress_bar.update()
 
@@ -791,7 +791,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
     def coalign_dems(path_combination: Tuple[str, str]):
         """Coalign two DEMs in one thread."""
         path_1, path_2 = path_combination
-        result = processing.coalign_dems(reference_path=path_1, aligned_path=path_2)
+        result = processing_tools.coalign_dems(reference_path=path_1, aligned_path=path_2)
         progress_bar.update()
 
         return result
@@ -839,7 +839,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
         # The order of these may seem unintuitive (since the reference points are transformed, not vice versa)
         # The transform is a "recipe" for how to get points from an aligned POV to a reference POV
         # Therefore, by transforming the aligned points to a reference POV, we get the corresponding reference points.
-        reference_point_positions = processing.transform_points(
+        reference_point_positions = processing_tools.transform_points(
             aligned_point_positions, result["composed"], inverse=False)
 
         def global_to_local(row: pd.Series) -> ms.Vector:

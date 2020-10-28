@@ -8,7 +8,7 @@ import statictypes
 
 from terra import files
 from terra.constants import CONSTANTS  # pylint: disable=no-name-in-module
-from terra.processing import inputs, metashape
+from terra.processing import inputs, metashape_tools
 from terra.utilities import no_stdout, notify
 
 
@@ -24,22 +24,22 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     inputs.export_camera_orientation_csv(dataset)
 
     # Load the metashape document or create a new one
-    if not redo and metashape.is_document(dataset):
-        doc = metashape.load_document(dataset)
+    if not redo and metashape_tools.is_document(dataset):
+        doc = metashape_tools.load_document(dataset)
         print(f"Loaded Metashape document for {dataset}")
     else:
-        doc = metashape.new_document(dataset)
+        doc = metashape_tools.new_document(dataset)
         shutil.rmtree(inputs.CACHE_FILES[f"{dataset}_temp_dir"])
         os.makedirs(inputs.CACHE_FILES[f"{dataset}_temp_dir"])
         print(f"Created new Metashape document for {dataset}")
 
     # Load or create a chunk with all the stereo-pairs
-    chunk = metashape.load_or_remake_chunk(doc, dataset)
+    chunk = metashape_tools.load_or_remake_chunk(doc, dataset)
 
     # Get the names of the stereo-pairs
-    pairs = metashape.get_chunk_stereo_pairs(chunk)
+    pairs = metashape_tools.get_chunk_stereo_pairs(chunk)
 
-    metashape.save_document(doc)
+    metashape_tools.save_document(doc)
 
     # TODO: Remove this when ICP seems to be working.
     # Import reference markers and fit the camera model
@@ -49,31 +49,31 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
                 break
         else:
             chunk.importMarkers(os.path.join(files.INPUT_ROOT_DIRECTORY, "datasets", "rhone", "tie_points.xml"))
-            metashape.optimize_cameras(chunk)
+            metashape_tools.optimize_cameras(chunk)
 
     # Remove the reference markers but keep the camera model fixed onward.
     if True:
         for marker in chunk.markers:
             if "Tie " in marker.label:
                 chunk.remove(marker)
-    metashape.optimize_cameras(chunk, fixed_sensors=True)
+    metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
 
     # Check which pairs do not yet have a dense cloud
-    unfinished_pairs = metashape.get_unfinished_pairs(chunk, metashape.Step.DENSE_CLOUD)
+    unfinished_pairs = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
     # Make missing dense clouds
     if len(unfinished_pairs) > 0:
-        metashape.build_dense_clouds(chunk, pairs=unfinished_pairs, quality=metashape.Quality.ULTRA,
-                                     filtering=metashape.Filtering.MILD)
-    metashape.save_document(doc)
+        metashape_tools.build_dense_clouds(chunk, pairs=unfinished_pairs, quality=metashape_tools.Quality.ULTRA,
+                                           filtering=metashape_tools.Filtering.MILD)
+    metashape_tools.save_document(doc)
 
     # Coalign stereo-pair DEMs with each other and generate markers from their alignment
-    metashape.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
-    metashape.optimize_cameras(chunk, fixed_sensors=True)
-    metashape.remove_bad_markers(chunk, marker_error_threshold=3)
-    metashape.optimize_cameras(chunk, fixed_sensors=True)
+    metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
+    metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
+    metashape_tools.remove_bad_markers(chunk, marker_error_threshold=3)
+    metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
 
-    metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.HIGH,
-                                 filtering=metashape.Filtering.MILD, all_together=True)
+    metashape_tools.build_dense_clouds(chunk, pairs=pairs, quality=metashape_tools.Quality.HIGH,
+                                       filtering=metashape_tools.Filtering.MILD, all_together=True)
 
     print("Generating DEM")
     with no_stdout():
@@ -87,7 +87,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
     # Remove markers that still have an unreasonable error and run another bundle adjustment.
     # metashape.optimize_cameras(chunk)
-    metashape.save_document(doc)
+    metashape_tools.save_document(doc)
 
     notify(f"{dataset} finished")
     return
@@ -95,27 +95,27 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     # Rebuild the dense clouds with the proper pose
     # metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.ULTRA,
     #                             filtering=metashape.Filtering.MILD)
-    metashape.save_document(doc)
+    metashape_tools.save_document(doc)
 
-    metashape.build_dems(chunk=chunk, pairs=pairs, resolution=CONSTANTS.dem_resolution)
-    metashape.save_document(doc)
+    metashape_tools.build_dems(chunk=chunk, pairs=pairs, resolution=CONSTANTS.dem_resolution)
+    metashape_tools.save_document(doc)
 
-    chunks_to_process = metashape.get_unfinished_chunks(aligned_chunks, metashape.Step.DENSE_CLOUD)
+    chunks_to_process = metashape_tools.get_unfinished_chunks(aligned_chunks, metashape_tools.Step.DENSE_CLOUD)
     if len(chunks_to_process) > 0:
         print("Building dense clouds")
-        metashape.build_dense_clouds(chunks_to_process, quality=metashape.Quality.HIGH)
-        metashape.save_document(doc)
+        metashape_tools.build_dense_clouds(chunks_to_process, quality=metashape_tools.Quality.HIGH)
+        metashape_tools.save_document(doc)
 
-    chunks_to_process = metashape.get_unfinished_chunks(aligned_chunks, metashape.Step.DEM)
+    chunks_to_process = metashape_tools.get_unfinished_chunks(aligned_chunks, metashape_tools.Step.DEM)
     if len(chunks_to_process) > 0:
         print("Building DEMs")
-        metashape.build_dems(chunks_to_process, dataset)
-        metashape.save_document(doc)
+        metashape_tools.build_dems(chunks_to_process, dataset)
+        metashape_tools.save_document(doc)
 
     return
 
-    chunks_to_process = metashape.get_unfinished_chunks(aligned_chunks, metashape.Step.ORTHOMOSAIC)
+    chunks_to_process = metashape_tools.get_unfinished_chunks(aligned_chunks, metashape_tools.Step.ORTHOMOSAIC)
     if len(chunks_to_process) > 0:
         print("Building orthomosaics")
-        metashape.build_orthomosaics(chunks_to_process, resolution=1)
-        metashape.save_document(doc)
+        metashape_tools.build_orthomosaics(chunks_to_process, resolution=1)
+        metashape_tools.save_document(doc)
