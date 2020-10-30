@@ -21,11 +21,11 @@
 	```
 2. 	To install the `terra` cli interface, perform one of either actions:
 	```bash
-	python setup.py 
+	pip install .
 	```
 	or one of the two to enable editing of the source code:
 	```bash
-	python setup.py develop --user
+	pip install --editable .
 	```
 	or
 	```bash
