@@ -7,3 +7,4 @@ temp/
 TODO
 .git-devel/
 setup-devel.sh
+docs/build/
