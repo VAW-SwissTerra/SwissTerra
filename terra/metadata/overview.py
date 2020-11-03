@@ -53,6 +53,7 @@ def get_camera_glacier_viewshed_and_distances() -> gpd.GeoDataFrame:
         # Measure the camera distances to the glacier and round to nearest metre (just to keep file size down a bit)
         camera_locations[glacier_code] = np.round(camera_locations.distance(glacier.geometry))
         # Calculate which viewsheds overlaps with the glacier
+        # TODO: Check for potential errors (https://gis.stackexchange.com/questions/375407/geopandas-intersects-doesnt-find-any-intersection)
         overlap = viewsheds.intersects(glacier.geometry)
         # Get the INVENTORY_NUMBER values from each viewshed that overlaps with the glacier
         overlapping_viewshed_inventory_numbers = viewsheds.loc[overlap.index]["INVENTORY_"].values

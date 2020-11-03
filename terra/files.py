@@ -28,9 +28,10 @@ INPUT_DIRECTORIES = {
 INPUT_FILES = {
     "manual_fiducials": "fiducials/Rhone_ManualFiducials_200909.csv",
     "sgi_1973": "shapefiles/SGI_1973.shp",
-    "outlines_1935": "shapefiles/Glacierarea_1935_split.shp",
+    "outlines_1935": "shapefiles/Glacierarea_1935_fixed.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
     "viewsheds": "shapefiles/V_TERRA_BGDI.shp",
+    "base_DEM": "basedata/swissALTI3D_2018_LV03_LN02.tif",
 }
 # Prepend the directory and file paths with the input root directory path.
 INPUT_DIRECTORIES = {key: os.path.join(INPUT_ROOT_DIRECTORY, value) for key, value in INPUT_DIRECTORIES.items()}
@@ -99,7 +100,6 @@ def remove_locks() -> None:
         print(f"Removed {removal_count} lockfiles")
     else:
         print("No lockfiles present")
-
 
 
 # TODO: Make this more usable
