@@ -3,3 +3,6 @@ prospector
 jedi
 rope
 pydocstyle
+sphinx
+recommonmark
+autopep8
