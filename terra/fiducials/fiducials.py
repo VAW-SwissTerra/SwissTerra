@@ -19,7 +19,7 @@ import skimage.transform
 import statictypes
 from tqdm import tqdm
 
-from terra import files
+from terra import files, metadata
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "fiducials")
 
@@ -248,7 +248,7 @@ class FrameMatcher:
         self.max_template_diff = max_template_diff
         self.progress_bar: Optional[tqdm] = None
         # Allow only approximately 16 Gb of files to be open at once
-        self.max_open_files = 16
+        self.max_open_files = 48
 
         # If multiple transformations are made in order, this is the latest valid one
         self.latest_transforms: Optional[Dict[str, skimage.transform.EuclideanTransform]] = None
@@ -381,11 +381,22 @@ class FrameMatcher:
         dst_pts_filtered = dst_pts[point_diff < self.max_image_offset]
 
         # Calculate the most likely Euclidean transform using RANSAC filtering.
-        transform, _ = skimage.measure.ransac((src_pts_filtered, dst_pts_filtered),
-                                              skimage.transform.EuclideanTransform,
-                                              min_samples=self.ransac_min_samples,
-                                              residual_threshold=self.ransac_reprojection_threshold,
-                                              max_trials=self.ransac_max_trials)
+        try:
+            transform, _ = skimage.measure.ransac((src_pts_filtered, dst_pts_filtered),
+                                                  skimage.transform.EuclideanTransform,
+                                                  min_samples=self.ransac_min_samples,
+                                                  residual_threshold=self.ransac_reprojection_threshold,
+                                                  max_trials=self.ransac_max_trials)
+        except ValueError as exception:
+            if "min_samples" in exception.args[0]:
+                warnings.warn(
+                    f"Image {filename} only has {len(src_pts_filtered)} points. Continuing anyway", RuntimeWarning)
+                transform, _ = skimage.measure.ransac((src_pts_filtered, dst_pts_filtered),
+                                                      skimage.transform.EuclideanTransform,
+                                                      min_samples=int(len(src_pts_filtered) // 2),
+                                                      residual_threshold=self.ransac_reprojection_threshold,
+                                                      max_trials=self.ransac_max_trials)
+
         if self.progress_bar is not None:
             self.progress_bar.update(1)
         return transform
@@ -1068,6 +1079,12 @@ def generate_fiducial_animation(output=os.path.join(TEMP_DIRECTORY, "fiducial_te
 
 
 if __name__ == "__main__":
-    matcher = FrameMatcher(cache=True)
+    matcher = FrameMatcher(cache=True, ransac_min_samples=50)
+    matcher.train()
+    image_meta = metadata.image_meta.collect_metadata()
+    filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
+    filenames = filenames[filenames != matcher.orb_reference_filename]
 
-    matcher.calculate_fiducial_projections()
+    matcher.filenames = list(filenames)
+
+    matcher.estimate(batch_size=200)
