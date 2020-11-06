@@ -1,3 +1,4 @@
+"""Manual fiducial placement helper functions and GUIs."""
 from __future__ import annotations
 
 import csv
@@ -12,6 +13,7 @@ import PySimpleGUI as sg
 from terra import files, metadata
 from terra.fiducials import fiducials
 
+# TODO: Get these numbers without instantiating the framematcher (it takes time..)
 FIDUCIAL_LOCATIONS = fiducials.FrameMatcher().fiducial_locations
 WINDOW_RADIUS = 250
 POINT_RADIUS = 4
@@ -23,32 +25,45 @@ CACHE_FILES = {
 }
 
 
-def get_fiducials(filepath: str) -> dict[str, np.ndarray]:
+def get_fiducials(filepath: str) -> dict[str, bytes]:
+    """
+    Extract the parts of an image that correspond approximately to where the fiducials are.
 
+    param: filepath: The filepath of the image.
+
+    return: fiducial_imgs: A dictionary of four in-memory PNG images (left, bottom, right, top).
+    """
     image = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
-    fiducial_imgs: dict[str, np.ndarray] = {}
 
+    # Go through each corner and extract corresponding parts of the image
+    fiducial_imgs: dict[str, np.ndarray] = {}
     for corner, coord in FIDUCIAL_LOCATIONS.items():
         fiducial = image[coord[0] - WINDOW_RADIUS: coord[0] + WINDOW_RADIUS,
                          coord[1] - WINDOW_RADIUS: coord[1] + WINDOW_RADIUS]
+        # Convert the image to a png in memory (for PySimpleGUI)
         imgbytes = cv2.imencode(".png", fiducial)[1].tobytes()
         fiducial_imgs[corner] = imgbytes
 
     return fiducial_imgs
 
 
-def draw_fiducials(window: sg.Window, fiducial_imgs: dict[str, np.ndarray]) -> dict[str, sg.Graph]:
+def draw_fiducials(window: sg.Window, fiducial_imgs: dict[str, bytes]):
+    """
+    Draw the fiducial images onto a PySimpleGUI window.
 
-    graphs: dict[str, sg.Graph] = {}
+    param: window: The PySimpleGUI window to draw on.
+    param: fiducial_imgs: The fiducial images to draw.
+
+    """
 
     for corner, img in fiducial_imgs.items():
-        graphs[corner] = window.Element(corner)
-        graphs[corner].DrawImage(data=img, location=(WINDOW_RADIUS * 2, WINDOW_RADIUS * 2))
-
-    return graphs
+        window[corner].DrawImage(data=img, location=(WINDOW_RADIUS * 2, WINDOW_RADIUS * 2))
 
 
 def get_unprocessed_images() -> np.ndarray:
+    """
+    Get the filenames of every image without fiducial marks.
+    """
     image_meta = metadata.image_meta.read_metadata()
 
     filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
@@ -56,16 +71,26 @@ def get_unprocessed_images() -> np.ndarray:
     return filenames
 
 
-def draw_image_nr(count: int, filepaths: np.ndarray, window: sg.Window, points: dict[str, int]):
-    fiducial_imgs = get_fiducials(filepaths[count])
-    graphs = draw_fiducials(window, fiducial_imgs)
+def draw_image_by_index(index: int, filepaths: np.ndarray, window: sg.Window, marked_fiducial_points: dict[str, int], marked_fiducial_circles: dict[str, int]):
+    """
+    Draw an image with the corresponding index in the filepaths array.
+
+    param: index: The index of the image to draw.
+    param: filepaths: An array of filepaths to index.
+    param: window: The PySimpleGUI window instance.
+    param: marked_fiducial_points: The points dictionary to update accordingly.
+    """
+    fiducial_imgs = get_fiducials(filepaths[index])
+    draw_fiducials(window, fiducial_imgs)
     for corner in fiducial_imgs:
-        points[corner] = graphs[corner].DrawPoint((-1, -1), size=POINT_RADIUS * 2, color="red")
+        # Make a point slightly outside of the canvas which (when moved) represents a marked fiducial
+        marked_fiducial_points[corner] = window[corner].DrawPoint((-1, -1), size=POINT_RADIUS * 2, color="red")
+        marked_fiducial_circles[corner] = window[corner].DrawCircle((-1, -1), radius=POINT_RADIUS * 3, line_color="red")
 
-    return graphs
 
+class FiducialMark(NamedTuple):  # pylint: disable=inherit-non-class, too-few-public-methods
+    """A manually placed fiducial mark with corresponding information."""
 
-class FiducialMark(NamedTuple):
     filename: str
     corner: str
     x_position: Optional[int]
@@ -74,66 +99,105 @@ class FiducialMark(NamedTuple):
 
 
 class MarkedFiducials:
+    """A collection of fiducial marks and associated methods."""
 
     def __init__(self, fiducial_marks: Optional[list[FiducialMark]] = None, filepath: Optional[str] = None):
+        """
+        Initialise a new empty instance.
+
+        param: fiducial_marks: Optional lsit of fiducial marks to specify.
+        param: filepath: Optional cache filepath. Will be set/modified if to_csv is run.
+        """
         self.fiducial_marks: list[FiducialMark] = fiducial_marks or []
 
         self.filepath: Optional[str] = filepath
 
-    @staticmethod
+    @ staticmethod
     def read_csv(filepath: str) -> MarkedFiducials:
+        """
+        Instantiate the class by reading it from a csv.
 
+        param: filepath: The csv to read.
+        """
         fiducial_marks: list[FiducialMark] = []
         with open(filepath) as infile:
             for row in csv.DictReader(infile):
+                # Convert the file types appropriately (they will all be strings otherwise)
                 for key in row:
                     try:
                         row[key] = int(row[key])  # type: ignore
+                    # If it can't be converted to an integer, it's either a string or a string called "None"
                     except ValueError:
-                        if row[key] == "None":
-                            row[key] = None
+                        if row[key] == "None":  # Convert a "None" string to a NoneType
+                            row[key] = None  # type: ignore
                         continue
+
+                # Create a FiducialMark from the row's values
                 fiducial_marks.append(FiducialMark(**row))  # type: ignore
 
         return MarkedFiducials(fiducial_marks=fiducial_marks, filepath=filepath)
 
-    @staticmethod
+    @ staticmethod
     def create_or_load(filepath: str) -> MarkedFiducials:
+        """
+        Load a fiducial mark collection if it can be found, otherwise create a new one.
+
+        param: filepath: The csv to attempt to read.
+        """
         if os.path.isfile(filepath):
             return MarkedFiducials.read_csv(filepath)
 
         return MarkedFiducials(filepath=filepath)
 
     def to_csv(self, filepath: str):
+        """
+        Write the fiducial mark collection to a file and set the filepath attribute accordingly.
+
+        param: filepath: The filepath of the csv to write.
+        """
         with open(filepath, "w") as outfile:
             writer = csv.DictWriter(outfile, fieldnames=FiducialMark._fields)
             writer.writeheader()
             for fiducial_mark in self.fiducial_marks:
                 writer.writerow(fiducial_mark._asdict())
+        self.filepath = filepath
 
     def save(self):
+        """Write the fiducial mark collection to the file specified with the filepath attribute."""
         if self.filepath is None:
-            raise ValueError("No filepath specified")
+            raise ValueError("The filepath attribute is not set.")
 
         self.to_csv(self.filepath)
 
     def add(self, fiducial_mark: FiducialMark) -> None:
+        """Add a fiducial mark to the collection."""
         self.fiducial_marks.append(fiducial_mark)
 
     def get_fiducial_marks(self, filename: str) -> dict[str, Optional[FiducialMark]]:
+        """
+        Get the fiducial marks from a specific image.
+
+        param: filename: The filename of the image.
+
+        return: marks: The fiducial marks (if any) of the image.
+        """
         fiducial_marks_for_file = [mark for mark in self.fiducial_marks if mark.filename == filename]
 
+        # Make a dictionary of fiducial marks which are None by default
         marks: dict[str, Optional[FiducialMark]] = {corner: None for corner in FIDUCIAL_LOCATIONS}
 
+        # Add the fiducial marks that exist (the nonexistent will still be None)
         for fiducial_mark in fiducial_marks_for_file:
             marks[fiducial_mark.corner] = fiducial_mark
 
         return marks
 
-    def get_all_previous_types(self) -> list[str]:
-
+    def get_used_frame_types(self) -> list[str]:
+        """Get all the frame types that have been used before."""
+        # Make an empty set of strings (sets only allow unique values, allowing for a unique list to be created rapidly)
         types: set[str] = set()
 
+        # Add the frame types to the set, possibly overwriting ones that already exist.
         for fiducial_mark in self.fiducial_marks:
             types.add(fiducial_mark.frame_type)
 
@@ -141,156 +205,205 @@ class MarkedFiducials:
 
 
 def gui():
-
+    """Show a GUI to mark fiducials in images."""
     filenames = get_unprocessed_images()
 
     filepaths = files.INPUT_DIRECTORIES["image_dir"] + filenames
     np.random.shuffle(filepaths)
 
-    count = 0
-
-    grid: list[sg.Column] = []
-
     marked_fiducials = MarkedFiducials.create_or_load(CACHE_FILES["marked_fiducials"])
-    types = marked_fiducials.get_all_previous_types()
+    frame_types = marked_fiducials.get_used_frame_types()
 
+    # Create the GUI layout
+    grid: list[sg.Column] = []
+    # Make a column for each fiducial mark
     for i, corner in enumerate(FIDUCIAL_LOCATIONS):
         image_viewer_layout = [
             [sg.Text(f"{corner.capitalize()} fiducial")],
-            [sg.Graph(
+            [sg.Graph(  # The graph is where the fiducial and marks are rendered
                 canvas_size=(WINDOW_RADIUS * 2, WINDOW_RADIUS * 2),
                 graph_bottom_left=(WINDOW_RADIUS * 2, 0),
                 graph_top_right=(0, WINDOW_RADIUS * 2),
                 key=corner,
                 enable_events=True,
                 drag_submits=True
-
             )],
         ]
 
+        # Add a previous/next image button to the first column
         if i == 0:
             image_viewer_layout[0].insert(1, sg.Button("Previous", key="previous"))
             image_viewer_layout[0].insert(2, sg.Button("Next", key="next"))
 
         grid.append(sg.Column(image_viewer_layout))
 
-    type_layout = sg.Column([
-        [sg.Text(text=f"Selected type: {DEFAULT_FRAME_TYPE_NAME}", key="selected-type")],
-        [sg.InputText(default_text="New type", key="new-type-text"), sg.Button("Submit", key="new-type-submit")],
-        [sg.Listbox(values=types, enable_events=True, key="types-list",
-                    select_mode=sg.LISTBOX_SELECT_MODE_SINGLE, size=(10, 20))]
-    ], key="type-layout")
+    # Add a column for selecting frame types
+    grid.append(sg.Column(
+        [
+            # TODO: Increase the allowed column width here.
+            [sg.Text(text=f"Selected type: {DEFAULT_FRAME_TYPE_NAME}", key="selected-type")],
+            [sg.InputText(default_text="New type", key="new-type-text"),
+             sg.Button("Submit", key="new-type-submit")],
+            [sg.Listbox(values=frame_types, enable_events=True, key="types-list",
+                        select_mode=sg.LISTBOX_SELECT_MODE_SINGLE, size=(10, 20))]
+        ],
+        key="type-layout")
+    )
 
-    grid.append(type_layout)
-
-    window = sg.Window(title="Hello there", layout=[grid])
+    # Make a window with a temporary title, using the grid that was just made
+    window = sg.Window(title="Hello there", layout=[grid], return_keyboard_events=True)
+    # Finalize it for whatever reason. TODO: Try removing this and see what happens
     window.Finalize()
 
-    points: dict[str, int] = {}
+    # Make a dictionary of points representing the marked fiducials
+    marked_fiducial_points: dict[str, int] = {}
+    marked_fiducial_circles: dict[str, int] = {}
+    # Start a count of which image index is looked at
+    image_index = 0
+    # Draw the first image in the filepaths array
+    draw_image_by_index(image_index, filepaths, window, marked_fiducial_points, marked_fiducial_circles)
 
-    graphs = draw_image_nr(count, filepaths, window, points)
+    frame_type = DEFAULT_FRAME_TYPE_NAME
 
-    pressed_type = DEFAULT_FRAME_TYPE_NAME
+    # Create an empty dictionary of marked fiducial coordinates (in the image coordinate system)
+    fiducial_coords: dict[str, Optional[list[int]]] = {}
 
-    coords: dict[str, Optional[list[int]]] = {}
-
+    # Instantiate timers for when things were interacted with.
+    # It's to check whether the graph or frame type was modified when the user switches picture.
     last_pressed_on_graph = 0.0
     last_updated_type = 0.0
     last_switched_image = 1.0
 
+    # Main event loop
     while True:
         event, values = window.read()
 
-        if event == "OK" or event == sg.WIN_CLOSED:
+        # Stop if the window was closed
+        if event == sg.WIN_CLOSED:
+            # TODO: Save the result for the active image before closing
             break
 
-        if "next" in event or "previous" in event:
+        # Switch picture
+        if "next" in event or "previous" in event or event in ["Right:114", "Left:113"]:
+            # Change the event name from keyboard to button style (just to make it simpler..)
+            if ":" in event:
+                event = "next" if event == "Right:114" else "previous"
 
-            for corner in coords:
-
+            # Check if fiducials or frame types were modified, and save if so.
+            for corner in fiducial_coords:
                 # Skip if the graph or type list has not been interacted with yet on this image
-                if last_pressed_on_graph < last_switched_image and last_pressed_on_graph < last_updated_type:
+                if last_pressed_on_graph < last_switched_image and last_updated_type < last_switched_image:
                     continue
 
                 # Skip if both the last mark was set to None and this one is also None
-                saved_fiducials = marked_fiducials.get_fiducial_marks(filenames[count])
-                if coords[corner] is None and saved_fiducials[corner] is None:
+                saved_fiducials = marked_fiducials.get_fiducial_marks(filenames[image_index])
+                if fiducial_coords[corner] is None and saved_fiducials[corner] is None:
                     continue
 
                 # Get the positions if they exist, otherwise just None
-                y_position, x_position = coords[corner] or (None, None)
+                y_position, x_position = fiducial_coords[corner] or (None, None)
 
                 marked_fiducials.add(
                     FiducialMark(
-                        filename=filenames[count],
+                        filename=filenames[image_index],
                         corner=corner,
-                        y_position=y_position,  # type: ignore
-                        x_position=x_position,  # type: ignore
-                        frame_type=pressed_type
+                        y_position=y_position,
+                        x_position=x_position,
+                        frame_type=frame_type
                     )
                 )
                 print(f"Saved fiducial {corner}")
+            # TODO: Make this dependent on if new fiducials were actually created.
             marked_fiducials.save()
 
+            # Update the time when the image was switched.
             last_switched_image = time.time()
 
-            new_count = count + (1 if event == "next" else -1)
-            count = new_count
-            graphs = draw_image_nr(count, filepaths, window, points)
-            saved_fiducials = marked_fiducials.get_fiducial_marks(filenames[count])
-            window.set_title(f"Examining {filenames[count]}")
-            pressed_type = DEFAULT_FRAME_TYPE_NAME
+            # Increment the image index up or down
+            image_index += (1 if event == "next" else -1)
+            # Draw the new image
+            draw_image_by_index(image_index, filepaths, window, marked_fiducial_points, marked_fiducial_circles)
+            # Set the title appropriately
+            window.set_title(f"Examining {filenames[image_index]}")
+            # Get potential previous fiducials
+            saved_fiducials = marked_fiducials.get_fiducial_marks(filenames[image_index])
+            # First set the pressed type to the default value, then check if a non-default value was saved before.
+            #frame_type = DEFAULT_FRAME_TYPE_NAME
+            # Loop through all saved fiducials (if any) and set them + the frame type accordingly
             for corner, fiducial_mark in saved_fiducials.items():
                 print("Loading fiducials", fiducial_mark)
                 if fiducial_mark is None:
-                    graphs[corner].RelocateFigure(figure=points[corner], x=-1, y=-1)
+                    # Move the graphical point outside of the canvas if there is no saved fiducial mark.
+                    window[corner].RelocateFigure(figure=marked_fiducial_points[corner], x=-1, y=-1)
+                    window[corner].RelocateFigure(figure=marked_fiducial_circles[corner], x=-1, y=-1)
                     continue
-                pressed_type = fiducial_mark.frame_type
+
+                # Update the frame type accordingly (the script only comes here if fiducial_mark is not None)
+                frame_type = fiducial_mark.frame_type
 
                 print(fiducial_mark)
-                graph_x_position = fiducial_mark.x_position + WINDOW_RADIUS - \
-                    FIDUCIAL_LOCATIONS[corner][1] + POINT_RADIUS  # type: ignore
-                graph_y_position = fiducial_mark.y_position + WINDOW_RADIUS - \
-                    FIDUCIAL_LOCATIONS[corner][0] + POINT_RADIUS  # type: ignore
+                # Set appropriate point positions for whether or not fiducial marks exist.
+                graph_x_position: int = fiducial_mark.x_position - FIDUCIAL_LOCATIONS[corner][1]\
+                    + WINDOW_RADIUS + POINT_RADIUS if fiducial_mark.x_position is not None else -1
+                graph_y_position: int = fiducial_mark.y_position - FIDUCIAL_LOCATIONS[corner][0]\
+                    + WINDOW_RADIUS + POINT_RADIUS if fiducial_mark.y_position is not None else -1
 
-                graphs[corner].RelocateFigure(
-                    figure=points[corner], x=graph_y_position, y=graph_x_position)
-            window["selected-type"](f"Selected type: {pressed_type}")
+                # Move the point appropriately
+                window[corner].RelocateFigure(
+                    figure=marked_fiducial_points[corner], x=graph_y_position, y=graph_x_position)
+                window[corner].RelocateFigure(
+                    figure=marked_fiducial_circles[corner], x=graph_y_position + POINT_RADIUS * 2, y=graph_x_position + POINT_RADIUS * 2)
 
-            continue
+            # Update the selected type text.
+            window["selected-type"](f"Selected type: {frame_type}")
 
+            continue  # TODO: Maybe remove this
+
+        # Check if any of the graphs (fiducial images) were interacted with
         for corner in FIDUCIAL_LOCATIONS:
             if event != corner:
                 continue
 
+            # Update when this happened (enabling the event to be saved)
             last_pressed_on_graph = time.time()
 
+            # If the placed value was outside of the image bounds, make it None
             for value in values[corner]:
                 if value < 0 or value > WINDOW_RADIUS * 2:
-                    coords[corner] = None
+                    fiducial_coords[corner] = None
                     break
+            # Otherwise, update the fiducial coordinates with the new value
             else:
-                coords[corner] = [values[corner][i] - WINDOW_RADIUS + FIDUCIAL_LOCATIONS[corner][i] for i in (0, 1)]
+                fiducial_coords[corner] = [values[corner][i] - WINDOW_RADIUS +
+                                           FIDUCIAL_LOCATIONS[corner][i] for i in (0, 1)]
 
-            print(corner, coords[corner])
+            # Move the graphical point appropriately
+            window[corner].RelocateFigure(marked_fiducial_points[corner], *
+                                          [value + POINT_RADIUS for value in values[corner]])
+            # Move the graphical circle appropriately
+            window[corner].RelocateFigure(marked_fiducial_circles[corner], *
+                                          [value + POINT_RADIUS * 3 for value in values[corner]])
 
-            graphs[corner].RelocateFigure(points[corner], *[value + POINT_RADIUS for value in values[corner]])
-
+            # Check if a new frame type was entered in the input field
         if event == "new-type-submit":
             text = values["new-type-text"]
-            if "New type" in text or text in types:
+            # Check if the type was just "New type" (accidental click) or if it already exists
+            if "New type" in text or text in frame_types:
                 continue
 
-            pressed_type = text
-            types.append(text)
-            window["types-list"].Update(values=types)
-            window["selected-type"](f"Selected type: {pressed_type}")
+            frame_type = text
+            frame_types.append(text)
+            # Update the frame types list and set the text
+            window["types-list"].Update(values=frame_types)
+            window["selected-type"](f"Selected type: {frame_type}")
+            # Update the time so that this result will be changed if another image was pressed
             last_updated_type = time.time()
             continue
 
+        # If a frame type was pressed in the list
         if "types-list" in event:
-            pressed_type = values["types-list"][0]
-            window["selected-type"](f"Selected type: {pressed_type}")
+            frame_type = values["types-list"][0]
+            window["selected-type"](f"Selected type: {frame_type}")
             last_updated_type = time.time()
 
     window.close()
