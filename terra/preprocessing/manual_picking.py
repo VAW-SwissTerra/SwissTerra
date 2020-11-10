@@ -66,7 +66,7 @@ def get_unprocessed_images() -> np.ndarray:
     """
     image_meta = preprocessing.image_meta.read_metadata()
 
-    filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
+    filenames = image_meta[image_meta["Instrument"].str.contains("Zeiss")]["Image file"].values
 
     return filenames
 
@@ -410,4 +410,6 @@ def gui():
 
 
 if __name__ == "__main__":
+    print(get_unprocessed_images())
+    raise ValueError()
     gui()

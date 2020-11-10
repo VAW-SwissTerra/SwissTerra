@@ -50,6 +50,29 @@ def get_reference_fiducials(file_path: str = files.INPUT_FILES["manual_fiducials
 
 
 @statictypes.enforce
+def get_marked_fiducials(filepath: str = files.INPUT_FILES["marked_fiducials"]) -> pd.DataFrame:
+
+    marked_fiducials = pd.read_csv(filepath)
+
+    # TODO: Remove this
+    marked_fiducials = marked_fiducials[marked_fiducials["frame_type"] == "rhone"]
+
+    # Reformat the data to the "old" format. TODO: Adapt to new format instead.
+    marked_fiducials.rename(
+        columns={
+            "filename": "camera",
+            "x_position": "x_px",
+            "y_position": "y_px"
+        },
+        inplace=True
+    )
+    fiducial_numbers = dict(zip(["top", "right", "bottom", "left"], [1, 2, 3, 4]))
+    marked_fiducials["fiducial"] = marked_fiducials.apply(lambda row: fiducial_numbers[row["corner"]], axis=1)
+
+    return marked_fiducials.dropna(how="any")
+
+
+@statictypes.enforce
 def get_reference_transforms(reference_fiducials: pd.DataFrame, verbose: bool = True) -> Dict[str, skimage.transform.EuclideanTransform]:
     """
     Find the average position of each fiducial and return the transform for each image to put it there.
@@ -64,7 +87,13 @@ def get_reference_transforms(reference_fiducials: pd.DataFrame, verbose: bool = 
     # Find the rotation of the image based on the angle between the left-right and top-bottom fiducial pairs
     # Then, rotate the fiducials and put them in the corrected_fiducials dataframe
     for filename, grouped_df in reference_fiducials.groupby("camera"):
-        fiducials = grouped_df.set_index("fiducial")  # For easier indexing
+        fiducials = grouped_df.set_index("fiducial").sort_index()  # For easier indexing
+        # Remove duplicates
+        fiducials = fiducials[~fiducials.index.duplicated(keep="last")]
+
+        # Skip if a fiducial mark is missing
+        if fiducials.shape[0] < 4:
+            continue
 
         # Find the horizontal (left-right) fiducial angle
         # using the inverse tangent of the y offset divied by the x offset
@@ -87,8 +116,8 @@ def get_reference_transforms(reference_fiducials: pd.DataFrame, verbose: bool = 
 
     # Find the average centre of the fiducials
     # Tts exact point is irrelevant. It's just a common point to align them all to.
-    mean_x = reference_fiducials["x_px"].mean()
-    mean_y = reference_fiducials["y_px"].mean()
+    mean_x = reference_fiducials["x_px"].median()
+    mean_y = reference_fiducials["y_px"].median()
 
     # Go through each of the (rotationally) corrected fiducials and subtract the offset to the mean center point
     # This means that all fiducial pairs are aligned as well as they can be
@@ -101,8 +130,8 @@ def get_reference_transforms(reference_fiducials: pd.DataFrame, verbose: bool = 
     errors = []
     for fiducial in np.unique(corrected_fiducials["fiducial"]):
         vals = corrected_fiducials[corrected_fiducials["fiducial"] == fiducial]
-        x_errors = vals["x_px"] - vals["x_px"].mean()
-        y_errors = vals["y_px"] - vals["y_px"].mean()
+        x_errors = vals["x_px"] - vals["x_px"].median()
+        y_errors = vals["y_px"] - vals["y_px"].median()
 
         error = np.sqrt(np.mean(np.square(np.linalg.norm([x_errors, y_errors], axis=0))))
         errors.append(error)
@@ -149,7 +178,7 @@ def find_frame_luminance_threshold(img: np.ndarray) -> int:
 class FrameMatcher:
     """Class to train and run image frame matching and correction."""
 
-    def __init__(self, image_folder: str = files.INPUT_DIRECTORIES["image_dir"], orb_reference_filename: str = "000-175-212.tif", frame_luminance_extra: int = 30,
+    def __init__(self, image_folder: str = files.INPUT_DIRECTORIES["image_dir"], orb_reference_filename: str = "000-360-201.tif", frame_luminance_extra: int = 30,
                  max_orb_features: int = 6000, orb_patch_size: int = 100, max_image_offset: float = 300.0,
                  ransac_reprojection_threshold: float = 8.0, ransac_min_samples: int = 100,
                  ransac_max_trials: int = 1000, template_size: int = 500, max_template_diff: int = 10,
@@ -202,7 +231,8 @@ class FrameMatcher:
         self.feature_matcher = cv2.BFMatcher_create(normType=cv2.NORM_HAMMING, crossCheck=True)
 
         # Get the manual fiducials and calculate their equivalent transforms.
-        self.manual_fiducials = get_reference_fiducials()
+        self.manual_fiducials = get_marked_fiducials()
+        self.filenames = list(np.unique(self.manual_fiducials["camera"]))
         if not os.path.isfile(os.path.join(CACHE_FILES["transforms_dir"], "manual_transforms.pkl")) or not self.cache:
             self.manual_transforms = get_reference_transforms(self.manual_fiducials, verbose=self.verbose)
             if self.cache:
@@ -1079,12 +1109,5 @@ def generate_fiducial_animation(output=os.path.join(TEMP_DIRECTORY, "fiducial_te
 
 
 if __name__ == "__main__":
-    matcher = FrameMatcher(cache=True, ransac_min_samples=50)
-    matcher.train()
-    image_meta = preprocessing.image_meta.collect_metadata()
-    filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
-    filenames = filenames[filenames != matcher.orb_reference_filename]
-
-    matcher.filenames = list(filenames)
-
-    matcher.estimate(batch_size=200)
+    print(get_reference_fiducials())
+    print(get_marked_fiducials())

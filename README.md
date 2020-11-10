@@ -47,7 +47,7 @@ Run `terra -h` to see the how to run the program.
 
 1. Set up a dataset ([see below for instructions](#datasets)), hereby named `DATASET`.
 
-2. `terra files check`: See that all files can be found.
+2. `terra files check-inputs`: See that all files can be found.
 
 3. `terra processing DATASET generate-inputs`: Generate all inputs with default settings.
 

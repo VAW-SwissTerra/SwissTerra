@@ -28,6 +28,7 @@ INPUT_DIRECTORIES = {
 # Set the names of the input files (excluding the root)
 INPUT_FILES = {
     "manual_fiducials": "fiducials/Rhone_ManualFiducials_200909.csv",
+    "marked_fiducials": "marked_fiducials.csv",
     "sgi_1973": "shapefiles/SGI_1973.shp",
     "outlines_1935": "shapefiles/Glacierarea_1935_fixed.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
