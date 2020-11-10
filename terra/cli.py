@@ -1,10 +1,12 @@
 #!/usr/bin/env python
+from __future__ import annotations
+
 import argparse
 import os
 import subprocess
 from typing import List
 
-from terra import fiducials, files, metadata, preprocessing, processing
+from terra import files, preprocessing, processing
 
 
 def main():
@@ -22,30 +24,22 @@ def parse_args():
     commands = parser.add_subparsers(dest="commands", metavar="module")
     commands.required = True
 
-    # Subcommands for cache (temp folder) handling
-    choices = {
-        "clear": "Remove everything in the cache folder.",
-        "list": "List files in the cache",
-        "remove-locks": "Remove Metashape lock files if they exist",
-    }
-    cache_parser = commands.add_parser(
-        "cache", formatter_class=argparse.RawTextHelpFormatter, help="Handle the cache (temporary files).")
-    cache_parser.add_argument("action",
-                              help=generate_help_text(choices), metavar="action", choices=choices.keys())
-    cache_parser.set_defaults(func=cache_commands)
-
     # Subcommands for input file handling
     choices = {
-        "check": "Check that all files can be found and have the correct file type."
+        "check-inputs": "Check that all files can be found and have the correct file type.",
+        "clear-cache": "Remove everything in the cache folder.",
+        "list-cache": "List files in the cache",
+        "remove-locks": "Remove Metashape lock files if they exist",
     }
     files_parser = commands.add_parser(
-        "files", formatter_class=argparse.RawTextHelpFormatter, help="Handle input files.")
+        "files", formatter_class=argparse.RawTextHelpFormatter, help="Handle input, output and cache files.")
     files_parser.add_argument("action",
                               help=generate_help_text(choices), metavar="action", choices=choices.keys())
     files_parser.set_defaults(func=files_commands)
 
     # Subcommands for the overview module
     choices = {
+        "show-metadata": "Display properties about the images' metadata.",
         "capture-dates": "Plot the dates for when photographs were captured"
     }
     overview_parser = commands.add_parser(
@@ -54,44 +48,25 @@ def parse_args():
                                  help=generate_help_text(choices), metavar="action", choices=choices.keys())
     overview_parser.set_defaults(func=overview_commands)
 
-    # Subcommands for metadata handling
-    choices = {
-        "collect-files": "Collect the files into an easily accessible format.",
-        "show": "Display properties about the images' metadata."
-    }
-    metadata_parser = commands.add_parser(
-        "metadata", formatter_class=argparse.RawTextHelpFormatter, help="Handle image metadata.")
-    metadata_parser.add_argument("action",
-                                 help=generate_help_text(choices), metavar="action", choices=choices.keys())
-    metadata_parser.set_defaults(func=metadata_commands)
-
     # Preprocessing data
     choices = {
+        "collect-metadata": "Collect the files into an easily accessible format.",
         "generate-masks": "Generate frame masks for each image with an estimated frame transform.",
         "show-reference-mask": "Show the generated reference mask.",
+        "train-fiducials": "Train the frame matcher with manually picked reference fiducials",
+        "estimate-fiducials": "Estimate frame transforms for all images.",
+        "animate-fiducials": "Animate the automated fiducial matches.",
+        "transform-images": "Apply the estimated fiducial transforms to the images and save them."
     }
     preprocessing_parser = commands.add_parser(
-        "preprocessing", help="Preprocessing tasks.", formatter_class=argparse.RawTextHelpFormatter)
+        "preprocessing", help="Run preprocessing tasks.", formatter_class=argparse.RawTextHelpFormatter)
     preprocessing_parser.add_argument("action", help=generate_help_text(choices),
                                       metavar="action", choices=choices.keys())
+    preprocessing_parser.add_argument("--dataset", type=str, default="full", help="limit the estimation to one dataset")
+    preprocessing_parser.add_argument("--redo", action="store_true",
+                                      help="clear the cache and start from the beginning")
     preprocessing_parser.set_defaults(func=preprocessing_commands)
 
-    # Fiducial marker handling
-    choices = {
-        "train": "Train the frame matcher with manually picked reference fiducials",
-        "estimate": "Estimate frame transforms for all images.",
-        "animate": "Animate the automated fiducial matches.",
-        "transform": "Apply the estimated trasnforms to the images and save them."
-    }
-    fiducials_parser = commands.add_parser(
-        "fiducials", formatter_class=argparse.RawTextHelpFormatter, help="Fiducial identification.")
-    fiducials_parser.add_argument("action",
-                                  help=generate_help_text(choices), metavar="action", choices=choices.keys())
-    fiducials_parser.add_argument("--dataset", type=str, default="full", help="limit the estimation to one dataset")
-    fiducials_parser.add_argument("--redo", action="store_true", help="clear the cache and start from the beginning")
-    fiducials_parser.set_defaults(func=fiducials_commands)
-
-    # Datasets. TODO: make these dynamic
     datasets = {dataset: files.read_dataset_meta(dataset) for dataset in files.DATASETS}
     choices = {dataset: "Process the {name} dataset".format(name=datasets[dataset]["name"]) for dataset in datasets}
     processing_parser = commands.add_parser("processing", formatter_class=argparse.RawTextHelpFormatter,
@@ -111,7 +86,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def generate_help_text(choice_explanations):
+def generate_help_text(choice_explanations: dict[str, str]):
+    """Generate help text for argparse subcommands."""
     help_text = """\n"""
     for choice, explanation in choice_explanations.items():
         help_text += f"{choice}\t{explanation}\n"
@@ -119,52 +95,37 @@ def generate_help_text(choice_explanations):
     return help_text
 
 
-def overview_commands(args):
-    """Run the overview module."""
-    if args.action == "capture-dates":
-        metadata.overview.get_capture_date_distribution()
-
-    print("Overview!")
-
-
-def cache_commands(args):
-    """Run the cache subcommands."""
-    if args.action == "clear":
+def files_commands(args):
+    """Run the file handling subcommands."""
+    if args.action == "check-inputs":
+        files.check_data()
+    elif args.action == "clear-cache":
         files.clear_cache()
-    elif args.action == "list":
+    elif args.action == "list-cache":
         files.list_cache()
-
     elif args.action == "remove-locks":
         files.remove_locks()
 
 
-def files_commands(args):
-    """Run the file handling subcommands."""
-
-    if args.action == "check":
-        files.check_data()
-
-
-def metadata_commands(args):
-    """Run the metadata handling subcommands."""
-    if args.action == "collect-files":
-        metadata.image_meta.collect_metadata(use_cached=False)
-    elif args.action == "show":
-        meta_file = metadata.image_meta.collect_metadata(use_cached=True)
+def overview_commands(args):
+    """Run the overview module."""
+    if args.action == "show-metadata":
+        meta_file = preprocessing.image_meta.collect_metadata(use_cached=True)
         print(meta_file)
         print(meta_file.describe())
         print(meta_file.dtypes)
+    elif args.action == "capture-dates":
+        preprocessing.overview.get_capture_date_distribution()
 
 
 def preprocessing_commands(args):
-    if args.action == "generate-masks":
+    """Run any of the preprocessing subcommands."""
+    if args.action == "collect-metadata":
+        preprocessing.image_meta.collect_metadata(use_cached=False)
+    elif args.action == "generate-masks":
         preprocessing.masks.generate_masks()
     elif args.action == "show-reference-mask":
         preprocessing.masks.show_reference_mask()
-
-
-def fiducials_commands(args):
-    """Run the fiducial handling subcommands."""
 
     def fetch_dataset_filenames(dataset: str) -> List[str]:
         try:
@@ -174,8 +135,8 @@ def fiducials_commands(args):
 
         return filenames
 
-    if args.action == "train":
-        matcher = fiducials.fiducials.FrameMatcher(cache=True)
+    if args.action == "train-fiducials":
+        matcher = preprocessing.fiducials.FrameMatcher(cache=True)
 
         if args.dataset != "full":
             matcher.filenames = fetch_dataset_filenames(args.dataset)
@@ -184,30 +145,32 @@ def fiducials_commands(args):
         if args.redo:
             matcher.clear_cache()
         matcher.train()
-    elif args.action == "animate":
-        matcher = fiducials.fiducials.FrameMatcher(cache=True)
-        # Rerun the training if not cached, otherwise use the cache
-        matcher.train()
 
-        if not os.path.isdir(fiducials.fiducials.CACHE_FILES["transformed_image_dir"])\
-                or len(os.listdir(fiducials.fiducials.CACHE_FILES["transformed_image_dir"])) == 0:
-            matcher.transform_images()
-        output_filename = fiducials.fiducials.generate_fiducial_animation()
-        # TODO: Add support for more operating systems than linux
-        subprocess.run(["xdg-open", output_filename], check=True, close_fds=True)
-    elif args.action == "transform":
-        matcher = fiducials.fiducials.FrameMatcher(cache=True)
-
-        matcher.transform_images()
-
-        print(f"Saved images to {fiducials.fiducials.CACHE_FILES['transformed_image_dir']}")
-
-    elif args.action == "estimate":
-        matcher = fiducials.fiducials.FrameMatcher(cache=True)
+    elif args.action == "estimate-fiducials":
+        matcher = preprocessing.fiducials.FrameMatcher(cache=True)
         if args.dataset != "full":
             matcher.filenames = fetch_dataset_filenames(args.dataset)
 
         matcher.estimate()
+
+    elif args.action == "animate-fiducials":
+        matcher = preprocessing.fiducials.FrameMatcher(cache=True)
+        # Rerun the training if not cached, otherwise use the cache
+        matcher.train()
+
+        if not os.path.isdir(preprocessing.fiducials.CACHE_FILES["transformed_image_dir"])\
+                or len(os.listdir(preprocessing.fiducials.CACHE_FILES["transformed_image_dir"])) == 0:
+            matcher.transform_images()
+        output_filename = preprocessing.fiducials.generate_fiducial_animation()
+        # TODO: Add support for more operating systems than linux
+        subprocess.run(["xdg-open", output_filename], check=True, close_fds=True)
+
+    elif args.action == "transform-images":
+        matcher = preprocessing.fiducials.FrameMatcher(cache=True)
+
+        matcher.transform_images()
+
+        print(f"Saved images to {preprocessing.fiducials.CACHE_FILES['transformed_image_dir']}")
 
 
 def processing_commands(args):

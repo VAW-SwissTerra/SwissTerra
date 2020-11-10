@@ -4,16 +4,16 @@ import pickle
 from collections import deque
 from typing import Optional
 
-import numpy as np
-import scipy.ndimage
-from tqdm import tqdm
-
 import cv2
 import matplotlib.pyplot as plt
+import numpy as np
+import scipy.ndimage
 import skimage.transform
 import statictypes
+from tqdm import tqdm
+
 from terra import files
-from terra.fiducials import fiducials
+from terra.preprocessing import fiducials
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "preprocessing")
 

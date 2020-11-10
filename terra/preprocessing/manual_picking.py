@@ -10,8 +10,8 @@ import cv2
 import numpy as np
 import PySimpleGUI as sg
 
-from terra import files, metadata
-from terra.fiducials import fiducials
+from terra import files, preprocessing
+from terra.preprocessing import fiducials
 
 # TODO: Get these numbers without instantiating the framematcher (it takes time..)
 FIDUCIAL_LOCATIONS = fiducials.FrameMatcher().fiducial_locations
@@ -64,7 +64,7 @@ def get_unprocessed_images() -> np.ndarray:
     """
     Get the filenames of every image without fiducial marks.
     """
-    image_meta = metadata.image_meta.read_metadata()
+    image_meta = preprocessing.image_meta.read_metadata()
 
     filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
 

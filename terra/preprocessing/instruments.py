@@ -6,20 +6,20 @@ import numpy as np
 import pandas as pd
 import statictypes
 
-from terra import files, metadata
+from terra import files, preprocessing
 
 
 @statictypes.enforce
 def get_instrument_names() -> np.ndarray:
     """Return the names of each instrument in the metadata cache."""
-    image_meta = metadata.image_meta.read_metadata()
+    image_meta = preprocessing.image_meta.read_metadata()
 
     return np.unique(image_meta["Instrument"])
 
 
 def plot_instrument_years() -> None:
     """Plot the temporal distribution of used instruments."""
-    image_meta = metadata.image_meta.read_metadata()
+    image_meta = preprocessing.image_meta.read_metadata()
 
     fig = plt.figure(figsize=(9, 5), dpi=80)
     fig.canvas.set_window_title('Instrument distribution')

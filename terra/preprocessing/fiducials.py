@@ -19,7 +19,7 @@ import skimage.transform
 import statictypes
 from tqdm import tqdm
 
-from terra import files, metadata
+from terra import files, preprocessing
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "fiducials")
 
@@ -1081,7 +1081,7 @@ def generate_fiducial_animation(output=os.path.join(TEMP_DIRECTORY, "fiducial_te
 if __name__ == "__main__":
     matcher = FrameMatcher(cache=True, ransac_min_samples=50)
     matcher.train()
-    image_meta = metadata.image_meta.collect_metadata()
+    image_meta = preprocessing.image_meta.collect_metadata()
     filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
     filenames = filenames[filenames != matcher.orb_reference_filename]
 

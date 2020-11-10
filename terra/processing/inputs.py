@@ -4,7 +4,7 @@ from collections import namedtuple
 import numpy as np
 import pandas as pd
 
-from terra import fiducials, files, metadata, preprocessing
+from terra import files, preprocessing
 
 DATASETS = files.DATASETS + ["full"]
 
@@ -34,7 +34,7 @@ def get_dataset_filenames(dataset: str) -> np.ndarray:
     """
     dataset_meta = files.read_dataset_meta(dataset)
 
-    dataset_filenames = metadata.image_meta.get_cameras_from_bounds(
+    dataset_filenames = preprocessing.image_meta.get_cameras_from_bounds(
         left=float(dataset_meta["bounds"]["left"]),
         right=float(dataset_meta["bounds"]["right"]),
         top=float(dataset_meta["bounds"]["top"]),
@@ -52,7 +52,7 @@ def get_dataset_metadata(dataset: str) -> pd.DataFrame:
 
     return: all_data / subset_data: Metadata for each image.
     """
-    all_data = metadata.image_meta.read_metadata()
+    all_data = preprocessing.image_meta.read_metadata()
 
     if dataset == "full":
         return all_data
@@ -85,7 +85,7 @@ def check_inputs(dataset: str) -> None:
     image_filenames = get_dataset_filenames(dataset)
     image_filepaths = [os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in image_filenames]
 
-    frame_matcher = fiducials.fiducials.FrameMatcher(verbose=False)
+    frame_matcher = preprocessing.fiducials.FrameMatcher(verbose=False)
     transforms = frame_matcher.load_transforms("merged_transforms.pkl")
 
     try:
@@ -93,7 +93,7 @@ def check_inputs(dataset: str) -> None:
         meta_exists = True
     except FileNotFoundError:
         meta_exists = False
-        missing_inputs.append(MissingInput(metadata.image_meta.CACHE_FILES["image_meta"], "image_meta_file"))
+        missing_inputs.append(MissingInput(preprocessing.image_meta.CACHE_FILES["image_meta"], "image_meta_file"))
 
     for filepath in image_filepaths:
         if not os.path.isfile(filepath):
@@ -157,10 +157,10 @@ def generate_inputs(dataset: str):
         print("================================\n")
 
     big_print("Collecting metadata")
-    metadata.image_meta.collect_metadata()
+    preprocessing.image_meta.collect_metadata()
 
     big_print("Finding fiducial locations")
-    frame_matcher = fiducials.fiducials.FrameMatcher()
+    frame_matcher = preprocessing.fiducials.FrameMatcher()
     frame_matcher.filenames = [filename for filename in get_dataset_filenames(dataset)
                                if filename != frame_matcher.orb_reference_filename]
     frame_matcher.train()

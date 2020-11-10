@@ -2,6 +2,7 @@
 import os
 import pathlib
 import shutil
+import subprocess
 from collections import namedtuple
 from typing import Any, Dict, Generator, List, Union
 
@@ -108,11 +109,9 @@ def list_cache() -> None:
     if not os.path.isdir(TEMP_DIRECTORY):
         print("No cache present")
         return
-    for root_dir, _, filenames in os.walk(TEMP_DIRECTORY):
-        if root_dir.endswith(".files"):  # If it's a Metashape project directory
-            continue
-        for filename in filenames:
-            print(os.path.join(root_dir, filename))
+    result = subprocess.run(["du", "-h", "-d2", TEMP_DIRECTORY], check=True,
+                            encoding="utf-8", stdout=subprocess.PIPE).stdout
+    print(result)
 
 
 def check_data() -> None:

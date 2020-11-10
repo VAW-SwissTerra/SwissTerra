@@ -12,7 +12,7 @@ import rasterio as rio
 import scipy.interpolate
 import statictypes
 
-from terra import files, metadata
+from terra import files, preprocessing
 from terra.constants import CONSTANTS
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "preprocessing")
@@ -193,7 +193,7 @@ def correct_metadata_coordinates(old_camera_locations: pd.DataFrame,
 
 
 def plot_metadata_position_correction() -> pd.DataFrame:
-    image_meta = metadata.image_meta.read_metadata()
+    image_meta = preprocessing.image_meta.read_metadata()
 
     # Set the gridsize to be approximately 1 km / px
     gridsize = 250

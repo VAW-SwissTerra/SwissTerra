@@ -15,7 +15,7 @@ import pandas as pd
 import statictypes
 from tqdm import tqdm
 
-from terra import fiducials, files, metadata
+from terra import files, preprocessing
 from terra.constants import CONSTANTS
 from terra.preprocessing import masks
 from terra.processing import inputs, processing_tools
@@ -303,7 +303,7 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
     param: chunk: The active chunk.
     param: sensor: The sensor to assign the fiducials to.
     """
-    matcher = fiducials.fiducials.FrameMatcher(verbose=False)
+    matcher = preprocessing.fiducials.FrameMatcher(verbose=False)
     new_fiducials = {}
     for corner in ["top", "right", "bottom", "left"]:
         fiducial = chunk.addMarker()
@@ -628,7 +628,7 @@ def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Mark
 def get_asift_markers(chunk):
     """Get markers from ASIFT matching."""
     warnings.warn("ASIFT is deprecated", DeprecationWarning)
-    all_candidates = metadata.image_meta.get_matching_candidates()
+    all_candidates = preprocessing.image_meta.get_matching_candidates()
 
     cameras = {camera.label + ".tif": camera for camera in chunk.cameras}
     matching_candidates = [candidates for candidates in all_candidates if candidates[0]
