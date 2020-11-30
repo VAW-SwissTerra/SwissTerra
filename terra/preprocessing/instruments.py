@@ -1,12 +1,18 @@
+from __future__ import annotations
+
 import os
 from typing import Dict
 
+import cartopy
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import statictypes
 
 from terra import files, preprocessing
+from terra.constants import CONSTANTS
+from terra.preprocessing import fiducials, image_meta
 
 
 @statictypes.enforce
@@ -53,5 +59,98 @@ def plot_instrument_years() -> None:
     plt.show()
 
 
+def plot_frame_type_distribution():
+
+    marked_fiducials = fiducials.get_marked_fiducials()
+    image_metadata = image_meta.read_metadata()
+
+    marked_metadata = image_metadata[image_metadata["Image file"].isin(marked_fiducials["camera"].values)].copy()
+    marked_metadata["frame_type"] = marked_metadata.apply(
+        lambda row: marked_fiducials[marked_fiducials["camera"] == row["Image file"]].iloc[0]["frame_type"], axis=1)
+    marked_metadata = marked_metadata[marked_metadata["frame_type"] != "default"]
+
+    for frame_type in np.unique(marked_metadata["frame_type"]):
+        frame_data = marked_metadata[marked_metadata["frame_type"] == frame_type]
+
+        print(frame_type)
+        for i, df in frame_data.groupby("Instrument"):
+            count = df['Instrument'].count()
+            print(f"\t{i}: {count}")
+            if count < 3:
+                for j, row in df.iterrows():
+                    print("\t\t" + row["Image file"])
+
+    return
+    plt.figure(figsize=(8, 5))
+
+    for frame_type, data in marked_metadata.groupby("frame_type"):
+        plt.scatter(data["easting"], data["northing"], label=frame_type, alpha=0.7)
+
+    plt.legend()
+
+    plt.savefig("temp/figures/wild_frame_distribution.jpg", dpi=300)
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    row1 = plt.subplot(2, 1, 1)
+    row2 = plt.subplot(2, 1, 2)
+
+    labels: list[plt.Text] = []
+    for i, (frame_type, data) in enumerate(marked_metadata.groupby("frame_type")):
+        row1.violinplot(dataset=data["date"].apply(lambda row: row.year), positions=[i])
+        row2.violinplot(dataset=data["date"].apply(lambda row: row.month), positions=[i])
+        labels.append(plt.Text(x=i, text=frame_type))
+
+    for row in [row1, row2]:
+        row.set_xticks(range(i + 1))  # pylint: disable=undefined-loop-variable
+        row.set_xticklabels(labels)
+
+    row1.set_ylabel("Year")
+    row2.set_ylabel("Month")
+
+    plt.savefig("temp/figures/wild_frame_temporal_distribution.jpg", dpi=300)
+
+    plt.show()
+
+
+def show_different_frame_types():
+
+    marked_fiducials = fiducials.get_marked_fiducials()
+    unique_frames = np.unique(marked_fiducials["frame_type"].values)
+    unique_frames = unique_frames[unique_frames != "default"]
+
+    window_radius = 250
+    coords = fiducials.WILD_FIDUCIAL_LOCATIONS["right"]
+
+    filenames = {
+        "blocky": "000-381-215.tif",
+        "triangular": "000-387-154.tif",
+        "rhone": "000-379-619.tif"
+
+    }
+
+    plt.figure(figsize=(8, 3.5))
+
+    for i, frame_type in enumerate(unique_frames):
+
+        plt.subplot(1, 3, i + 1)
+
+        image = cv2.imread(os.path.join(
+            files.INPUT_DIRECTORIES["image_dir"], filenames[frame_type]), cv2.IMREAD_GRAYSCALE)
+        fiducial = image[coords[0] - window_radius: coords[0] + window_radius,
+                         coords[1] - window_radius: coords[1] + window_radius]
+
+        plt.axis("off")
+        plt.title(frame_type)
+        plt.imshow(fiducial, cmap="Greys_r")
+
+    plt.tight_layout()
+    os.makedirs("temp/figures/", exist_ok=True)
+    plt.savefig("temp/figures/wild_frame_types.jpg", dpi=300)
+    plt.show()
+    print(unique_frames)
+
+
 if __name__ == "__main__":
-    plot_instrument_years()
+    # plot_instrument_years()
+    plot_frame_type_distribution()

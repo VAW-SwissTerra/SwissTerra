@@ -7,14 +7,16 @@ import time
 from typing import Any, NamedTuple, Optional
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import PySimpleGUI as sg
 
 from terra import files, preprocessing
 from terra.preprocessing import fiducials
 
 # TODO: Get these numbers without instantiating the framematcher (it takes time..)
-FIDUCIAL_LOCATIONS = fiducials.FrameMatcher().fiducial_locations
+FIDUCIAL_LOCATIONS = fiducials.WILD_FIDUCIAL_LOCATIONS
 WINDOW_RADIUS = 250
 POINT_RADIUS = 4
 DEFAULT_FRAME_TYPE_NAME = "default"
@@ -40,6 +42,7 @@ def get_fiducials(filepath: str) -> dict[str, bytes]:
     for corner, coord in FIDUCIAL_LOCATIONS.items():
         fiducial = image[coord[0] - WINDOW_RADIUS: coord[0] + WINDOW_RADIUS,
                          coord[1] - WINDOW_RADIUS: coord[1] + WINDOW_RADIUS]
+
         # Convert the image to a png in memory (for PySimpleGUI)
         imgbytes = cv2.imencode(".png", fiducial)[1].tobytes()
         fiducial_imgs[corner] = imgbytes
@@ -66,7 +69,9 @@ def get_unprocessed_images() -> np.ndarray:
     """
     image_meta = preprocessing.image_meta.read_metadata()
 
-    filenames = image_meta[image_meta["Instrument"].str.contains("Zeiss")]["Image file"].values
+    filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
+
+    filenames = image_meta[image_meta["Instrument"] == "Wild8"]["Image file"].values
 
     return filenames
 
@@ -207,9 +212,9 @@ class MarkedFiducials:
 def gui():
     """Show a GUI to mark fiducials in images."""
     filenames = get_unprocessed_images()
+    np.random.shuffle(filenames)
 
     filepaths = files.INPUT_DIRECTORIES["image_dir"] + filenames
-    np.random.shuffle(filepaths)
 
     marked_fiducials = MarkedFiducials.create_or_load(CACHE_FILES["marked_fiducials"])
     frame_types = marked_fiducials.get_used_frame_types()
@@ -343,16 +348,16 @@ def gui():
 
                 print(fiducial_mark)
                 # Set appropriate point positions for whether or not fiducial marks exist.
-                graph_x_position: int = fiducial_mark.x_position - FIDUCIAL_LOCATIONS[corner][1]\
-                    + WINDOW_RADIUS + POINT_RADIUS if fiducial_mark.x_position is not None else -1
-                graph_y_position: int = fiducial_mark.y_position - FIDUCIAL_LOCATIONS[corner][0]\
-                    + WINDOW_RADIUS + POINT_RADIUS if fiducial_mark.y_position is not None else -1
+                graph_x_position: int = WINDOW_RADIUS - (fiducial_mark.x_position - FIDUCIAL_LOCATIONS[corner][1])\
+                    + POINT_RADIUS if fiducial_mark.x_position is not None else -1
+                graph_y_position: int = WINDOW_RADIUS - (fiducial_mark.y_position - FIDUCIAL_LOCATIONS[corner][0])\
+                    + POINT_RADIUS if fiducial_mark.y_position is not None else -1
 
                 # Move the point appropriately
                 window[corner].RelocateFigure(
-                    figure=marked_fiducial_points[corner], x=graph_y_position, y=graph_x_position)
+                    figure=marked_fiducial_points[corner], x=graph_x_position, y=graph_y_position)
                 window[corner].RelocateFigure(
-                    figure=marked_fiducial_circles[corner], x=graph_y_position + POINT_RADIUS * 2, y=graph_x_position + POINT_RADIUS * 2)
+                    figure=marked_fiducial_circles[corner], y=graph_y_position + POINT_RADIUS * 2, x=graph_x_position + POINT_RADIUS * 2)
 
             # Update the selected type text.
             window["selected-type"](f"Selected type: {frame_type}")
@@ -367,6 +372,8 @@ def gui():
             # Update when this happened (enabling the event to be saved)
             last_pressed_on_graph = time.time()
 
+            x_position, y_position = values[corner]
+
             # If the placed value was outside of the image bounds, make it None
             for value in values[corner]:
                 if value < 0 or value > WINDOW_RADIUS * 2:
@@ -374,15 +381,15 @@ def gui():
                     break
             # Otherwise, update the fiducial coordinates with the new value
             else:
-                fiducial_coords[corner] = [values[corner][i] - WINDOW_RADIUS +
+                fiducial_coords[corner] = [WINDOW_RADIUS - [y_position, x_position][i] +
                                            FIDUCIAL_LOCATIONS[corner][i] for i in (0, 1)]
 
             # Move the graphical point appropriately
             window[corner].RelocateFigure(marked_fiducial_points[corner], *
-                                          [value + POINT_RADIUS for value in values[corner]])
+                                          [value + POINT_RADIUS for value in [x_position, y_position]])
             # Move the graphical circle appropriately
             window[corner].RelocateFigure(marked_fiducial_circles[corner], *
-                                          [value + POINT_RADIUS * 3 for value in values[corner]])
+                                          [value + POINT_RADIUS * 3 for value in [x_position, y_position]])
 
             # Check if a new frame type was entered in the input field
         if event == "new-type-submit":
@@ -409,7 +416,23 @@ def gui():
     window.close()
 
 
+def show_marked_fiducials(index=0):
+    """
+    Plot the marked fiducials on an image.
+
+    :param index: The index of the filename to plot.
+    """
+    data = pd.read_csv("input/marked_fiducials.csv")
+    all_filenames = np.unique(data["filename"].values)
+    cam0 = data.loc[data["filename"] == all_filenames[index]]
+
+    img0 = cv2.imread(os.path.join(
+        files.INPUT_DIRECTORIES["image_dir"], all_filenames[index]), cv2.IMREAD_GRAYSCALE)
+
+    plt.imshow(img0, cmap="Greys_r")
+    plt.scatter(cam0["x_position"], cam0["y_position"])
+    plt.show()
+
+
 if __name__ == "__main__":
-    print(get_unprocessed_images())
-    raise ValueError()
     gui()

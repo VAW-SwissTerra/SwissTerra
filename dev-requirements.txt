@@ -1,4 +1,4 @@
-mypy
+git+https://github.com/python/mypy.git
 prospector
 jedi
 rope

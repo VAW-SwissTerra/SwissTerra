@@ -19,7 +19,7 @@ import skimage.transform
 import statictypes
 from tqdm import tqdm
 
-from terra import files, preprocessing
+from terra import files, preprocessing, processing
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "fiducials")
 
@@ -27,6 +27,14 @@ CACHE_FILES = {
     "fiducial_template_dir":  os.path.join(TEMP_DIRECTORY, "fiducial_templates"),
     "transforms_dir": os.path.join(TEMP_DIRECTORY, "transforms"),
     "transformed_image_dir": os.path.join(TEMP_DIRECTORY, "transformed_images"),
+}
+
+
+WILD_FIDUCIAL_LOCATIONS = {
+    "top": (250, 3500),
+    "left": (2450, 250),
+    "right": (2350, 6749),
+    "bottom": (4370, 3500)
 }
 
 
@@ -55,7 +63,7 @@ def get_marked_fiducials(filepath: str = files.INPUT_FILES["marked_fiducials"]) 
     marked_fiducials = pd.read_csv(filepath)
 
     # TODO: Remove this
-    marked_fiducials = marked_fiducials[marked_fiducials["frame_type"] == "rhone"]
+    #marked_fiducials = marked_fiducials[marked_fiducials["frame_type"] == "rhone"]
 
     # Reformat the data to the "old" format. TODO: Adapt to new format instead.
     marked_fiducials.rename(
@@ -231,7 +239,7 @@ class FrameMatcher:
         self.feature_matcher = cv2.BFMatcher_create(normType=cv2.NORM_HAMMING, crossCheck=True)
 
         # Get the manual fiducials and calculate their equivalent transforms.
-        self.manual_fiducials = get_marked_fiducials()
+        self.manual_fiducials = get_reference_fiducials()
         self.filenames = list(np.unique(self.manual_fiducials["camera"]))
         if not os.path.isfile(os.path.join(CACHE_FILES["transforms_dir"], "manual_transforms.pkl")) or not self.cache:
             self.manual_transforms = get_reference_transforms(self.manual_fiducials, verbose=self.verbose)
@@ -260,12 +268,7 @@ class FrameMatcher:
             os.makedirs(folder, exist_ok=True)
 
         # The approximate coordinates of the fiducial centres after homogenisation transform (in y,x format)
-        self.fiducial_locations = {
-            "top": (250, 3500),
-            "left": (2450, 250),
-            "right": (2350, 6749),
-            "bottom": (4370, 3500)
-        }
+        self.fiducial_locations = WILD_FIDUCIAL_LOCATIONS
 
         # Set other attributes
         self.max_orb_features = max_orb_features
@@ -615,7 +618,7 @@ class FrameMatcher:
 
         # Transform the image to the latest estimated transform.
         # Template matching is usually run after ORB, so the ORB transforms will be the latest ones.
-        if self.latest_transforms is not None:
+        if self.latest_transforms is not None and filename in self.latest_transforms:
             image = self.transform_image(image=original_image,
                                          transform=self.latest_transforms[filename],
                                          output_shape=self.reference_frame.shape)
@@ -1109,5 +1112,19 @@ def generate_fiducial_animation(output=os.path.join(TEMP_DIRECTORY, "fiducial_te
 
 
 if __name__ == "__main__":
-    print(get_reference_fiducials())
-    print(get_marked_fiducials())
+
+    rhone_filenames = processing.inputs.get_dataset_filenames("rhone")
+    matcher = FrameMatcher(orb_reference_filename=str(rhone_filenames[0]))
+    # matcher.clear_cache()
+    matcher.filenames = list(rhone_filenames[1:])
+
+    new_filenames = [str(filename).replace(".tif", "N.tif") for filename in rhone_filenames]
+    new_filenames = [filename for filename in rhone_filenames if os.path.isfile(
+        os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename))]
+
+    matcher.filenames += new_filenames
+
+    matcher.train()
+    matcher.estimate()
+
+    print(matcher.calculate_fiducial_projections().keys())
