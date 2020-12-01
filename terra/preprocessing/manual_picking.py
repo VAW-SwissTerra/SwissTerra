@@ -13,10 +13,11 @@ import pandas as pd
 import PySimpleGUI as sg
 
 from terra import files, preprocessing
+from terra.constants import CONSTANTS
 from terra.preprocessing import fiducials
 
 # TODO: Get these numbers without instantiating the framematcher (it takes time..)
-FIDUCIAL_LOCATIONS = fiducials.ZEISS_FIDUCIAL_LOCATIONS
+FIDUCIAL_LOCATIONS = CONSTANTS.zeiss_fiducial_locations
 WINDOW_RADIUS = 250
 POINT_RADIUS = 4
 DEFAULT_FRAME_TYPE_NAME = "default"
@@ -211,6 +212,18 @@ class MarkedFiducials:
             types.add(fiducial_mark.frame_type)
 
         return list(types)
+
+    def get_filenames_for_frame_type(self, frame_type: str) -> list[str]:
+        """Get all the filenames corresponding to the frame type."""
+        if self.fiducial_marks is None:
+            raise ValueError("No fiducial marks available.")
+
+        # Get the latest frame types (newer entires overwrite the older ones for the same filename)
+        frame_types: dict[str, str] = {mark.filename: mark.frame_type for mark in self.fiducial_marks}
+
+        filenames: list[str] = [filename for filename in frame_types if frame_types[filename] == frame_type]
+
+        return filenames
 
 
 def gui():
