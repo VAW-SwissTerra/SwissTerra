@@ -16,14 +16,14 @@ from terra import files, preprocessing
 from terra.preprocessing import fiducials
 
 # TODO: Get these numbers without instantiating the framematcher (it takes time..)
-FIDUCIAL_LOCATIONS = fiducials.WILD_FIDUCIAL_LOCATIONS
+FIDUCIAL_LOCATIONS = fiducials.ZEISS_FIDUCIAL_LOCATIONS
 WINDOW_RADIUS = 250
 POINT_RADIUS = 4
 DEFAULT_FRAME_TYPE_NAME = "default"
 
 
 CACHE_FILES = {
-    "marked_fiducials": os.path.join(files.INPUT_ROOT_DIRECTORY, "marked_fiducials.csv")
+    "marked_fiducials": os.path.join(files.INPUT_ROOT_DIRECTORY, "../manual_input/marked_fiducials.csv")
 }
 
 
@@ -42,6 +42,10 @@ def get_fiducials(filepath: str) -> dict[str, bytes]:
     for corner, coord in FIDUCIAL_LOCATIONS.items():
         fiducial = image[coord[0] - WINDOW_RADIUS: coord[0] + WINDOW_RADIUS,
                          coord[1] - WINDOW_RADIUS: coord[1] + WINDOW_RADIUS]
+
+        # Increase the contrast of the fiducial to simplify the visualisation
+        fiducial -= fiducial.min()
+        fiducial = (fiducial * (255 / fiducial.max())).astype(fiducial.dtype)
 
         # Convert the image to a png in memory (for PySimpleGUI)
         imgbytes = cv2.imencode(".png", fiducial)[1].tobytes()
@@ -69,9 +73,9 @@ def get_unprocessed_images() -> np.ndarray:
     """
     image_meta = preprocessing.image_meta.read_metadata()
 
-    filenames = image_meta[image_meta["Instrument"].str.contains("Wild")]["Image file"].values
+    filenames = image_meta[image_meta["Instrument"].str.contains("Zeiss")]["Image file"].values
 
-    filenames = image_meta[image_meta["Instrument"] == "Wild8"]["Image file"].values
+    filenames = image_meta[image_meta["Instrument"] == "Zeiss1"]["Image file"].values
 
     return filenames
 
@@ -246,11 +250,11 @@ def gui():
     grid.append(sg.Column(
         [
             # TODO: Increase the allowed column width here.
-            [sg.Text(text=f"Selected type: {DEFAULT_FRAME_TYPE_NAME}", key="selected-type")],
+            [sg.Text(text=f"Selected type: {DEFAULT_FRAME_TYPE_NAME}", key="selected-type", size=(20, 2))],
             [sg.InputText(default_text="New type", key="new-type-text"),
              sg.Button("Submit", key="new-type-submit")],
             [sg.Listbox(values=frame_types, enable_events=True, key="types-list",
-                        select_mode=sg.LISTBOX_SELECT_MODE_SINGLE, size=(10, 20))]
+                        select_mode=sg.LISTBOX_SELECT_MODE_SINGLE, size=(20, 20))]
         ],
         key="type-layout")
     )

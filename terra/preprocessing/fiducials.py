@@ -37,6 +37,13 @@ WILD_FIDUCIAL_LOCATIONS = {
     "bottom": (4370, 3500)
 }
 
+ZEISS_FIDUCIAL_LOCATIONS = {
+    "top": (500, 4270),
+    "left": (500, 1400),
+    "right": (500, 7100),
+    "bottom": (5700, 4270)
+}
+
 
 # TODO: Fix weird estimate bug
 
