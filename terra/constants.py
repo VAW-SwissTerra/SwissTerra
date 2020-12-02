@@ -25,6 +25,7 @@ class Constants(ConstantType):  # pylint: disable=R0903
     max_point_cloud_threads: int = 10  # How many threads to cap the program on to not run out of memory
     dense_cloud_min_confidence: int = 3  # The minimum proprietary Metashape confidence value to accept.
     dem_resolution: float = 5.0  # The resolution in metres to generate DEMs with.
+    max_threads: int = 20  # The maximum amount of threads to process in.
     wild_fiducial_locations = WILD_FIDUCIAL_LOCATIONS
     zeiss_fiducial_locations = ZEISS_FIDUCIAL_LOCATIONS
 
