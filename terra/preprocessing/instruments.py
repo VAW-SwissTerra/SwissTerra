@@ -12,7 +12,7 @@ import statictypes
 
 from terra import files, preprocessing
 from terra.constants import CONSTANTS
-from terra.preprocessing import fiducials, image_meta
+from terra.preprocessing import fiducials, image_meta, manual_picking
 
 
 @statictypes.enforce
@@ -61,13 +61,17 @@ def plot_instrument_years() -> None:
 
 def plot_frame_type_distribution():
 
-    marked_fiducials = fiducials.get_marked_fiducials()
+    marked_fiducials = manual_picking.MarkedFiducials.create_or_load(files.INPUT_FILES["marked_fiducials"])
+    unique_frame_types = marked_fiducials.get_used_frame_types()
     image_metadata = image_meta.read_metadata()
 
-    marked_metadata = image_metadata[image_metadata["Image file"].isin(marked_fiducials["camera"].values)].copy()
-    marked_metadata["frame_type"] = marked_metadata.apply(
-        lambda row: marked_fiducials[marked_fiducials["camera"] == row["Image file"]].iloc[0]["frame_type"], axis=1)
-    marked_metadata = marked_metadata[marked_metadata["frame_type"] != "default"]
+    marked_metadata = pd.DataFrame(columns=list(image_metadata.columns) + ["frame_type"])
+
+    for frame_type in unique_frame_types:
+        filenames = marked_fiducials.get_filenames_for_frame_type(frame_type)
+        meta_with_frame = image_metadata[image_metadata["Image file"].isin(filenames)].copy()
+        meta_with_frame["frame_type"] = frame_type
+        marked_metadata = marked_metadata.append(meta_with_frame)
 
     for frame_type in np.unique(marked_metadata["frame_type"]):
         frame_data = marked_metadata[marked_metadata["frame_type"] == frame_type]
@@ -115,12 +119,11 @@ def plot_frame_type_distribution():
 
 def show_different_frame_types():
 
-    marked_fiducials = fiducials.get_marked_fiducials()
-    unique_frames = np.unique(marked_fiducials["frame_type"].values)
-    unique_frames = unique_frames[unique_frames != "default"]
+    marked_fiducials = manual_picking.MarkedFiducials.create_or_load(files.INPUT_FILES["marked_fiducials"])
+    unique_frames = marked_fiducials.get_used_frame_types()
 
     window_radius = 250
-    coords = fiducials.WILD_FIDUCIAL_LOCATIONS["right"]
+    coords = CONSTANTS.wild_fiducial_locations["right"]
 
     filenames = {
         "blocky": "000-381-215.tif",
@@ -154,3 +157,6 @@ def show_different_frame_types():
 if __name__ == "__main__":
     # plot_instrument_years()
     plot_frame_type_distribution()
+    #image_metadata = image_meta.read_metadata()
+    # for filename in image_metadata[image_metadata["Instrument"].isin(["Wild3", "Wild5"])]["Image file"]:
+    #    print(filename)

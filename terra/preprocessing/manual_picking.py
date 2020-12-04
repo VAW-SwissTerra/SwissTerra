@@ -17,7 +17,7 @@ from terra.constants import CONSTANTS
 from terra.preprocessing import fiducials
 
 # TODO: Get these numbers without instantiating the framematcher (it takes time..)
-FIDUCIAL_LOCATIONS = CONSTANTS.zeiss_fiducial_locations
+FIDUCIAL_LOCATIONS: dict[str, tuple[int, int]] = {}
 WINDOW_RADIUS = 250
 POINT_RADIUS = 4
 DEFAULT_FRAME_TYPE_NAME = "default"
@@ -44,9 +44,11 @@ def get_fiducials(filepath: str) -> dict[str, bytes]:
         fiducial = image[coord[0] - WINDOW_RADIUS: coord[0] + WINDOW_RADIUS,
                          coord[1] - WINDOW_RADIUS: coord[1] + WINDOW_RADIUS]
 
-        # Increase the contrast of the fiducial to simplify the visualisation
-        fiducial -= fiducial.min()
-        fiducial = (fiducial * (255 / fiducial.max())).astype(fiducial.dtype)
+        # Increase the contrast
+        max_value = np.percentile(fiducial.flatten(), 95)
+        min_value = np.percentile(fiducial.flatten(), 5)
+        fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
+                           a_min=0, a_max=255).astype(fiducial.dtype)
 
         # Convert the image to a png in memory (for PySimpleGUI)
         imgbytes = cv2.imencode(".png", fiducial)[1].tobytes()
@@ -76,7 +78,7 @@ def get_unprocessed_images() -> np.ndarray:
 
     filenames = image_meta[image_meta["Instrument"].str.contains("Zeiss")]["Image file"].values
 
-    filenames = image_meta[image_meta["Instrument"] == "Zeiss1"]["Image file"].values
+    filenames = image_meta[image_meta["Instrument"] == "Wild3"]["Image file"].values
 
     return filenames
 
@@ -226,12 +228,16 @@ class MarkedFiducials:
         return filenames
 
 
-def gui():
+def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
     """Show a GUI to mark fiducials in images."""
-    filenames = get_unprocessed_images()
-    np.random.shuffle(filenames)
+    global FIDUCIAL_LOCATIONS
+    FIDUCIAL_LOCATIONS = CONSTANTS.wild_fiducial_locations if "wild" in instrument_type.lower()\
+        else CONSTANTS.zeiss_fiducial_locations
+    if filenames is None:
+        filenames = get_unprocessed_images()
+        np.random.shuffle(filenames)
 
-    filepaths = files.INPUT_DIRECTORIES["image_dir"] + filenames
+    filepaths = np.array([os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in filenames])
 
     marked_fiducials = MarkedFiducials.create_or_load(CACHE_FILES["marked_fiducials"])
     frame_types = marked_fiducials.get_used_frame_types()
@@ -452,4 +458,4 @@ def show_marked_fiducials(index=0):
 
 
 if __name__ == "__main__":
-    gui()
+    gui("wild")

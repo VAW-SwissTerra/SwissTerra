@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 import os
 import pickle
+import warnings
 from typing import NamedTuple, Optional
 
 import cv2
@@ -49,8 +50,8 @@ class ImageTransforms:
         self.frame_type = frame_type
 
         # Residuals may be added lateGggr
-        self.residuals: Optional[np.ndarray] = None
-        self.matching_uncertainties: Optional[np.ndarray] = None
+        self.manual_residuals: Optional[np.ndarray] = None
+        self.estimation_uncertainties: Optional[np.ndarray] = None
         # self.error: Optional[list[float]] = None
 
     @statictypes.enforce
@@ -71,11 +72,11 @@ class ImageTransforms:
         """Return a string representation of the object."""
         string = f"ImageTransforms object with {len(self._inner_dict)} entries of the type {self.frame_type}. "
 
-        if self.residuals is not None:
+        if self.manual_residuals is not None:
             string += f"Residual error: {self.get_residual_rmse():.2f} px"
-        if self.matching_uncertainties is not None:
+        if self.estimation_uncertainties is not None:
             string += f"Mean uncertainty: {self.get_mean_uncertainty() * 100: .2f}%,"
-            string += f" max: {np.max(self.matching_uncertainties) * 100:.2f}%"
+            string += f" max: {np.max(self.estimation_uncertainties) * 100:.2f}%"
         return string
 
     def __iter__(self):
@@ -105,7 +106,7 @@ class ImageTransforms:
         if len(self._inner_dict) != residuals.shape[0]:
             raise ValueError("Residuals have a different shape than the transform entries!")
 
-        self.residuals = residuals
+        self.manual_residuals = residuals
 
     def add_uncertainties(self, uncertainties: list[list[float]]) -> None:
         """
@@ -116,15 +117,33 @@ class ImageTransforms:
         if len(self._inner_dict) != len(uncertainties):
             raise ValueError("Uncertainties list does not match the length of the collection")
 
-        self.matching_uncertainties = np.array(uncertainties)
+        self.estimation_uncertainties = np.array(uncertainties)
 
     def get_mean_uncertainty(self) -> float:
         """Return the mean uncertainty of the collection."""
 
-        if self.matching_uncertainties is None:
+        if self.estimation_uncertainties is None:
             return np.NaN
 
-        return np.mean(self.matching_uncertainties)
+        return np.mean(self.estimation_uncertainties)
+
+    def get_outlier_filenames(self) -> np.ndarray:
+        """Find the image filenames whose uncertainties are statistical outliers."""
+        if self.estimation_uncertainties is None:
+            raise ValueError("No uncertainties exist")
+
+        if np.all(np.isnan(self.estimation_uncertainties)):
+            return np.array([])
+
+        # Get the maximum uncertainty for each image
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            uncertainties = np.nanmax(self.estimation_uncertainties, axis=1)
+        median = np.nanmedian(uncertainties)
+        std = np.nanstd(uncertainties)
+        outlier_threshold = median + std * 2
+
+        return np.array(self.keys())[uncertainties > outlier_threshold]
 
     def get_residual_rmse(self) -> float:
         """
@@ -132,10 +151,10 @@ class ImageTransforms:
 
         Returns NaN if no residuals are available.
         """
-        if self.residuals is None:
+        if self.manual_residuals is None:
             return np.NaN
 
-        return np.sqrt(np.mean(np.square(self.residuals)))
+        return np.sqrt(np.mean(np.square(self.manual_residuals)))
 
 
 def make_reference_transforms(marked_fiducials: manual_picking.MarkedFiducials, frame_type: str) -> ImageTransforms:
@@ -422,8 +441,8 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
         fiducial = image[fiducial_bounds.as_slice()]
         # Optionally stretch the lighness to between the 1st and 99th percentile of the lightness
         if equalize:
-            max_value = np.percentile(fiducial.flatten(), 99)
-            min_value = np.percentile(fiducial.flatten(), 1)
+            max_value = np.percentile(fiducial.flatten(), 95)
+            min_value = np.percentile(fiducial.flatten(), 5)
             fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
                                a_min=0, a_max=255).astype(fiducial.dtype)
 
@@ -569,23 +588,102 @@ def get_all_filenames_for_frame_type(frame_type: str, marked_fiducials: manual_p
     return image_metadata[image_metadata["Instrument"].isin(instruments)]["Image file"].values
 
 
+def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms, estimated_transforms: ImageTransforms) -> ImageTransforms:
+
+    # Make sure that the manual and estimated transforms have the same frame type
+    if manual_transforms.frame_type != estimated_transforms.frame_type:
+        raise ValueError("Estimated and manual transforms have differing frame types")
+
+    # This is a temporary fix.
+    # The attribute matching_uncertainties was renamed to estimation_uncertainties after some transforms were estimated.
+    # Therefore, some of the pickled results still have the old name..
+    try:
+        getattr(estimated_transforms, "estimation_uncertainties")
+    except AttributeError:
+        estimated_transforms.estimation_uncertainties = estimated_transforms.matching_uncertainties  # type: ignore
+
+    # Get the filenames that were estimated poorly
+    estimated_outliers = estimated_transforms.get_outlier_filenames()
+
+    # Make a new ImageTransforms object which will be filled further down
+    merged_transforms = ImageTransforms(frame_type=estimated_transforms.frame_type)
+
+    # Make arrays of manual residuals and estimated uncertainties.
+    # They will respecively be NaNs if they are estimated/manual
+    merged_transforms.manual_residuals = np.empty(shape=(len(estimated_transforms.keys()), 4))
+    merged_transforms.manual_residuals[:] = np.nan
+    merged_transforms.estimation_uncertainties = merged_transforms.manual_residuals.copy()
+
+    # Generate a list of filenames that can replace the estimated if needed
+    manually_picked_filenames: list[str] = manual_transforms.keys()
+
+    # Loop over all filenames and add the appropriate version (manual/estimated) to merged_transforms
+    for i, filename in enumerate(estimated_transforms.keys()):
+        # Check if the manual transform should be added
+        if filename in estimated_outliers and filename in manually_picked_filenames:
+            merged_transforms[filename] = manual_transforms[filename]
+            merged_transforms.manual_residuals[i, :] = manual_transforms.manual_residuals[manually_picked_filenames.index(
+                filename), :]  # type: ignore
+        else:
+            merged_transforms[filename] = estimated_transforms[filename]
+            merged_transforms.estimation_uncertainties[i,
+                                                       :] = estimated_transforms.estimation_uncertainties[i, :]  # type: ignore
+
+    # If no manual transforms were used, this should be reflected in the dataset
+    if np.all(np.isnan(merged_transforms.manual_residuals)):
+        merged_transforms.manual_residuals = None
+
+    return merged_transforms
+
+
 def estimate_transforms(frame_type: str, marked_fiducials: manual_picking.MarkedFiducials) -> ImageTransforms:
     """
     Estimate transforms on all images with the given frame type
     """
-    pass
-
-
-if __name__ == "__main__":
-    marked_fiducials = manual_picking.MarkedFiducials.read_csv(os.path.join(
-        files.INPUT_ROOT_DIRECTORY, "../manual_input/marked_fiducials.csv"))
-    frame_type = "wild_triangular"
-
+    print(f"Getting transforms for {frame_type}")
     all_filenames = get_all_filenames_for_frame_type(frame_type, marked_fiducials=marked_fiducials)
 
     manual_transforms = make_reference_transforms(marked_fiducials, frame_type=frame_type)
     templates = get_fiducial_templates(manual_transforms, frame_type=frame_type)
 
-    transforms = match_templates(filenames=all_filenames, frame_type=frame_type, templates=templates)
+    estimated_transforms = match_templates(filenames=all_filenames, frame_type=frame_type, templates=templates)
 
-    print(transforms)
+    merged_transforms = merge_manual_and_estimated_transforms(manual_transforms, estimated_transforms)
+
+    return merged_transforms
+
+
+def manually_complement_matching(frame_type: str, manual_transforms: ImageTransforms,
+                                 estimated_transforms: ImageTransforms):
+    estimated_outliers = estimated_transforms.get_outlier_filenames()
+
+    unfixed_outliers = estimated_outliers[~np.isin(estimated_outliers, manual_transforms.keys())]
+
+    manual_picking.gui(instrument_type=frame_type, filenames=unfixed_outliers)
+
+
+def get_all_frame_type_transforms(complement: bool = False):
+    marked_fiducials = manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"])
+    frame_types = marked_fiducials.get_used_frame_types()
+
+    transforms: dict[str, ImageTransforms] = {frame_type: estimate_transforms(frame_type, marked_fiducials)
+                                              for frame_type in frame_types}
+
+    print("\nLooking for outliers")
+    total_outliers = 0
+    for frame_type in transforms:
+        n_outliers = len(transforms[frame_type].get_outlier_filenames())
+        print(f"\t{frame_type} has {n_outliers} outlier(s)")
+        total_outliers += n_outliers
+
+    print(f"There are {total_outliers} outlier(s) in total")
+
+    if complement:
+        for frame_type in transforms:
+            manual_transforms = make_reference_transforms(marked_fiducials, frame_type)
+
+            manually_complement_matching(frame_type, manual_transforms, estimated_transforms=transforms[frame_type])
+
+
+if __name__ == "__main__":
+    get_all_frame_type_transforms(complement=True)
