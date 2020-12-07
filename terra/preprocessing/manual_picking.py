@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import os
 import time
+import warnings
 from typing import Any, NamedTuple, Optional
 
 import cv2
@@ -14,7 +15,7 @@ import PySimpleGUI as sg
 
 from terra import files, preprocessing
 from terra.constants import CONSTANTS
-from terra.preprocessing import fiducials
+from terra.preprocessing import fiducials, image_meta
 
 # TODO: Get these numbers without instantiating the framematcher (it takes time..)
 FIDUCIAL_LOCATIONS: dict[str, tuple[int, int]] = {}
@@ -78,7 +79,7 @@ def get_unprocessed_images() -> np.ndarray:
 
     filenames = image_meta[image_meta["Instrument"].str.contains("Zeiss")]["Image file"].values
 
-    filenames = image_meta[image_meta["Instrument"] == "Wild3"]["Image file"].values
+    filenames = image_meta[image_meta["Instrument"] == "Wild10"]["Image file"].values
 
     return filenames
 
@@ -227,6 +228,30 @@ class MarkedFiducials:
 
         return filenames
 
+    def get_instrument_frame_type_relation(self) -> dict[str, str]:
+
+        used_frame_types = self.get_used_frame_types()
+        image_metadata = image_meta.read_metadata()
+
+        instrument_frame_types: dict[str, str] = {}
+        for frame_type in used_frame_types:
+            filenames = [mark.filename for mark in self.fiducial_marks if mark.frame_type == frame_type]
+            instruments = np.unique(image_metadata[image_metadata["Image file"].isin(filenames)]["Instrument"])
+            for instrument in instruments:
+                if instrument in instrument_frame_types:
+                    warnings.warn(f"{instrument} of frame type {frame_type} already estimated " +
+                                  f"as {instrument_frame_types[instrument]}")
+                instrument_frame_types[instrument] = frame_type
+
+        return instrument_frame_types
+
+    def subset(self, filenames: list[str]) -> MarkedFiducials:
+        """Create a new instance using only the specified filenames."""
+
+        fiducial_marks = [mark for mark in self.fiducial_marks if np.any(np.isin(filenames, mark.filename))]
+
+        return MarkedFiducials(fiducial_marks=fiducial_marks)
+
 
 def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
     """Show a GUI to mark fiducials in images."""
@@ -356,7 +381,7 @@ def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
             # Get potential previous fiducials
             saved_fiducials = marked_fiducials.get_fiducial_marks(filenames[image_index])
             # First set the pressed type to the default value, then check if a non-default value was saved before.
-            #frame_type = DEFAULT_FRAME_TYPE_NAME
+            # frame_type = DEFAULT_FRAME_TYPE_NAME
             # Loop through all saved fiducials (if any) and set them + the frame type accordingly
             for corner, fiducial_mark in saved_fiducials.items():
                 print("Loading fiducials", fiducial_mark)

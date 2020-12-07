@@ -37,6 +37,8 @@ def generate_masks(buffer_size: int = 20) -> None:
 
     param: buffer_size: The amount of pixels to buffer the calculated reference frame with.
     """
+    # TODO: Fix new loading of transforms
+    raise NotImplementedError("Transforms are loaded in a new way")
     # Instantiate a FrameMatcher instance to use static methods and get metadata
     matcher = fiducials.FrameMatcher(verbose=False)
 

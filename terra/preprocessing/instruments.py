@@ -80,7 +80,7 @@ def plot_frame_type_distribution():
         for i, df in frame_data.groupby("Instrument"):
             count = df['Instrument'].count()
             print(f"\t{i}: {count}")
-            if count < 3:
+            if count < 10:
                 for j, row in df.iterrows():
                     print("\t\t" + row["Image file"])
 
@@ -158,5 +158,5 @@ if __name__ == "__main__":
     # plot_instrument_years()
     plot_frame_type_distribution()
     #image_metadata = image_meta.read_metadata()
-    # for filename in image_metadata[image_metadata["Instrument"].isin(["Wild3", "Wild5"])]["Image file"]:
+    # for filename in image_metadata[image_metadata["Instrument"].isin(["Wild4"])]["Image file"]:
     #    print(filename)

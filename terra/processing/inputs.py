@@ -85,6 +85,7 @@ def check_inputs(dataset: str) -> None:
     image_filenames = get_dataset_filenames(dataset)
     image_filepaths = [os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in image_filenames]
 
+    raise NotImplementedError("Frame matcher doesn't work anymore")
     frame_matcher = preprocessing.fiducials.FrameMatcher(verbose=False)
     transforms = frame_matcher.load_transforms("merged_transforms.pkl")
 
@@ -160,6 +161,7 @@ def generate_inputs(dataset: str):
     preprocessing.image_meta.collect_metadata()
 
     big_print("Finding fiducial locations")
+    raise NotImplementedError("Frame matching works in a different way now")
     frame_matcher = preprocessing.fiducials.FrameMatcher()
     frame_matcher.filenames = [filename for filename in get_dataset_filenames(dataset)
                                if filename != frame_matcher.orb_reference_filename]

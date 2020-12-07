@@ -208,5 +208,13 @@ def get_cameras_from_bounds(left: float, right: float, top: float, bottom: float
     return cameras_within_bounds
 
 
+def get_filenames_for_instrument(instrument: str) -> np.ndarray:
+    """Return all camera filenames with a specific instrument."""
+    image_metadata = read_metadata()
+    filenames = image_metadata[image_metadata["Instrument"] == instrument]["Image file"].values
+
+    return filenames
+
+
 if __name__ == "__main__":
     get_matching_candidates()

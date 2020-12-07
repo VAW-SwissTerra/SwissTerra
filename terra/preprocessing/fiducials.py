@@ -4,12 +4,11 @@ import json
 import os
 import pickle
 import warnings
-from typing import NamedTuple, Optional
+from typing import Optional
 
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import skimage.transform
 import statictypes
 from tqdm import tqdm
@@ -469,7 +468,7 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
     return fiducials
 
 
-def get_fiducial_templates(transforms: ImageTransforms, frame_type: str, cache=True) -> dict[str, Fiducial]:
+def get_fiducial_templates(transforms: ImageTransforms, frame_type: str, instrument: str, cache=True) -> dict[str, Fiducial]:
     """
     Construct or load fiducial templates from every image with manually picked fiducial marks.
 
@@ -480,15 +479,16 @@ def get_fiducial_templates(transforms: ImageTransforms, frame_type: str, cache=T
     :returns: A dictionary of fiducial templates (Fiducial objects) for every corner.
     """
     # Define the filepath to look for / save / ignore the cache file
-    cache_filepath = os.path.join(CACHE_FILES["fiducial_template_dir"], frame_type + ".pkl")
+    cache_filepath = os.path.join(CACHE_FILES["fiducial_template_dir"], instrument + ".pkl")
 
     # Return a cached version if it exists and should be used.
     if cache and os.path.isfile(cache_filepath):
         return pickle.load(open(cache_filepath, mode="rb"))
 
-    print("Generating new fiducial templates")
+    print(f"Generating new fiducial templates for {instrument}")
     # Generate a reference frame from the manually picked fiducial positions.
     reference_frame = generate_reference_frame(transforms)
+
     # Extract fiducials in predefined places from the frame
     fiducials = extract_fiducials(reference_frame, frame_type=frame_type, window_size=250, equalize=False)
 
@@ -501,11 +501,11 @@ def get_fiducial_templates(transforms: ImageTransforms, frame_type: str, cache=T
         # Save previews of the templates for debugging/visualisation purposes
         for corner in fiducials:
             cv2.imwrite(os.path.join(CACHE_FILES["fiducial_template_dir"],
-                                     f"{frame_type}_{corner}_preview.jpg"), fiducials[corner].fiducial_image)
+                                     f"{instrument}_{corner}_preview.jpg"), fiducials[corner].fiducial_image)
     return fiducials
 
 
-def match_templates(filenames: list[str], frame_type: str, templates: dict[str, Fiducial],
+def match_templates(filenames: list[str], frame_type: str, instrument: str, templates: dict[str, Fiducial],
                     cache: bool = True) -> ImageTransforms:
     """
     Use template matching to match fiducials in images, compared to the provided fiducial templates.
@@ -517,12 +517,12 @@ def match_templates(filenames: list[str], frame_type: str, templates: dict[str, 
     :returns: Transforms estimated from feature matching, with corresponding uncertainties.
     """
     # Define the filepath to look for / save / ignore the cache file
-    cache_filepath = os.path.join(TEMP_DIRECTORY, "transforms", frame_type + ".pkl")
+    cache_filepath = os.path.join(TEMP_DIRECTORY, "transforms", instrument + ".pkl")
     # Return a cached version if it exists and should be used
     if cache and os.path.isfile(cache_filepath):
         return pickle.load(open(cache_filepath, "rb"))
 
-    print("Generating new template transforms")
+    print(f"Generating new template transforms for {instrument}")
 
     # Instantiate a progress bar to monitor the progress.
     progress_bar = tqdm(total=len(filenames), desc="Matching templates")
@@ -654,16 +654,17 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     return merged_transforms
 
 
-def estimate_transforms(manual_transforms: ImageTransforms, filenames: list[str]) -> ImageTransforms:
+def estimate_transforms(manual_transforms: ImageTransforms, filenames: list[str], instrument: str) -> ImageTransforms:
     """
     Estimate transforms on all images with the given frame type
     """
     frame_type = manual_transforms.frame_type
-    print(f"Getting transforms for {frame_type}")
+    print(f"Getting transforms for {instrument} ({frame_type})")
 
-    templates = get_fiducial_templates(manual_transforms, frame_type=frame_type)
+    templates = get_fiducial_templates(manual_transforms, frame_type=frame_type, instrument=instrument)
 
-    estimated_transforms = match_templates(filenames=filenames, frame_type=frame_type, templates=templates)
+    estimated_transforms = match_templates(filenames=filenames, frame_type=frame_type,
+                                           templates=templates, instrument=instrument)
 
     return estimated_transforms
 
@@ -705,6 +706,7 @@ def compare_transforms(reference_transforms: ImageTransforms, compared_transform
         compared_points = compared_transforms[filename](start_coords)
 
         rms = np.sqrt(np.mean(np.square(np.linalg.norm(compared_points - reference_points, axis=1))))
+        print(f"\t{filename}: {rms}")
 
         uncertainties.append(np.linalg.norm(
             compared_transforms.estimation_uncertainties[compared_transforms.keys().index(filename)]))  # type: ignore
@@ -723,29 +725,47 @@ def compare_transforms(reference_transforms: ImageTransforms, compared_transform
 
 def get_all_frame_type_transforms(complement: bool = False):
     marked_fiducials = manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"])
-    frame_types = marked_fiducials.get_used_frame_types()
-    frame_types = ["zeiss_normal", "zeiss_pointy"]
+    instruments = marked_fiducials.get_instrument_frame_type_relation()
 
-    manual_transforms = {frame_type: make_reference_transforms(marked_fiducials, frame_type=frame_type)
-                         for frame_type in frame_types}
-    frame_filenames = {frame_type: get_all_filenames_for_frame_type(frame_type, marked_fiducials)
-                       for frame_type in frame_types}
-    estimated_transforms = {
-        frame_type: estimate_transforms(
-            manual_transforms[frame_type],
-            frame_filenames[frame_type][np.isin(frame_filenames[frame_type], manual_transforms[frame_type].keys())]
-        ) for frame_type in frame_types
+    instrument_filenames = {
+        instrument: image_meta.get_filenames_for_instrument(
+            instrument
+        ) for instrument in instruments
+    }
+    manual_transforms = {
+        instrument: make_reference_transforms(
+            marked_fiducials.subset(instrument_filenames[instrument]),
+            frame_type=instruments[instrument]
+        ) for instrument in instruments
     }
 
-    frame_type = "zeiss_normal"
-    compare_transforms(manual_transforms[frame_type], estimated_transforms[frame_type])
+    fiducial_templates = {
+        instrument: get_fiducial_templates(
+            transforms=manual_transforms[instrument],
+            frame_type=instruments[instrument],
+            instrument=instrument,
+            cache=True
+        ) for instrument in instruments
+    }
+
+    estimated_transforms = {
+        instrument: match_templates(
+            filenames=instrument_filenames[instrument],
+            frame_type=instruments[instrument],
+            templates=fiducial_templates[instrument],
+            instrument=instrument,
+            cache=True
+        ) for instrument in instruments
+    }
 
     merged_transforms = {
-        frame_type: merge_manual_and_estimated_transforms(
-            manual_transforms[frame_type],
-            estimated_transforms[frame_type]
-        ) for frame_type in frame_types
+        instrument: merge_manual_and_estimated_transforms(
+            manual_transforms[instrument],
+            estimated_transforms[instrument]
+        ) for instrument in instruments
     }
+
+    print(merged_transforms)
 
     return
 
@@ -766,19 +786,4 @@ def get_all_frame_type_transforms(complement: bool = False):
 
 
 if __name__ == "__main__":
-    # get_all_frame_type_transforms(complement=False)
-    frame_type = "wild_triangular"
-    marked_fiducials = manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"])
-    filenames = marked_fiducials.get_filenames_for_frame_type(frame_type)
-    manual_transforms = make_reference_transforms(marked_fiducials, frame_type)
-
-    estimated_transforms = estimate_transforms(manual_transforms, filenames=filenames)
-
-    output_shape = load_image(estimated_transforms.keys()[0]).shape
-    for filename in tqdm(estimated_transforms.keys()):
-        image = load_image(filename)
-        transformed_image = transform_image(image, estimated_transforms[filename], output_shape=output_shape)
-
-        cv2.imwrite(f"temp/fiducials/frames/{filename.replace('.tif', '.jpg')}", transformed_image)
-
-    compare_transforms(manual_transforms, estimated_transforms)
+    get_all_frame_type_transforms(complement=False)

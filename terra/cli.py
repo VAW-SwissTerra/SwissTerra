@@ -6,7 +6,9 @@ import os
 import subprocess
 from typing import List
 
-from terra import files, preprocessing, processing
+from terra import files  # TODO: Change to import submodules instead
+from terra import preprocessing, processing
+from terra.preprocessing import fiducials
 
 
 def main():
