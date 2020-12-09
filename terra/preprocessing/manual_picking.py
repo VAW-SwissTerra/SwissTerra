@@ -290,11 +290,15 @@ def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
 
         grid.append(sg.Column(image_viewer_layout))
 
+    # Set the frame type as "default" if the instrument type is something simple, like "zeiss".
+    # If instrument_type is something long, like "zeiss_normal", use that as the default instead.
+    frame_type = DEFAULT_FRAME_TYPE_NAME if len(instrument_type) < 5 else instrument_type
+
     # Add a column for selecting frame types
     grid.append(sg.Column(
         [
             # TODO: Increase the allowed column width here.
-            [sg.Text(text=f"Selected type: {DEFAULT_FRAME_TYPE_NAME}", key="selected-type", size=(20, 2))],
+            [sg.Text(text=f"Selected type: {frame_type}", key="selected-type", size=(20, 2))],
             [sg.InputText(default_text="New type", key="new-type-text"),
              sg.Button("Submit", key="new-type-submit")],
             [sg.Listbox(values=frame_types, enable_events=True, key="types-list",
@@ -315,8 +319,6 @@ def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
     image_index = 0
     # Draw the first image in the filepaths array
     draw_image_by_index(image_index, filepaths, window, marked_fiducial_points, marked_fiducial_circles)
-
-    frame_type = DEFAULT_FRAME_TYPE_NAME
 
     # Create an empty dictionary of marked fiducial coordinates (in the image coordinate system)
     fiducial_coords: dict[str, Optional[list[int]]] = {}
@@ -374,6 +376,9 @@ def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
 
             # Increment the image index up or down
             image_index += (1 if event == "next" else -1)
+            if image_index < 0 or image_index == filepaths.shape[0]:
+                window.close()
+                return
             # Draw the new image
             draw_image_by_index(image_index, filepaths, window, marked_fiducial_points, marked_fiducial_circles)
             # Set the title appropriately

@@ -28,6 +28,7 @@ class Constants(ConstantType):  # pylint: disable=R0903
     max_threads: int = 20  # The maximum amount of threads to process in.
     wild_fiducial_locations = WILD_FIDUCIAL_LOCATIONS
     zeiss_fiducial_locations = ZEISS_FIDUCIAL_LOCATIONS
+    transform_outlier_threshold: float = 10
 
 
 CONSTANTS = Constants()

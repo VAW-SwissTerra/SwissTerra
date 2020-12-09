@@ -9,6 +9,7 @@ from typing import Optional
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import skimage.measure
 import skimage.transform
 import statictypes
 from tqdm import tqdm
@@ -67,15 +68,25 @@ class ImageTransforms:
         """Retrieve an item from the collection."""
         return self._inner_dict[filename]
 
+    def __delitem__(self, filename: str):
+        index = self.keys().index(filename)
+        if self.estimation_uncertainties is not None:
+            self.estimation_uncertainties = np.delete(self.estimation_uncertainties, index, axis=0)
+
+        if self.manual_residuals is not None:
+            self.manual_residuals = np.delete(self.estimation_uncertainties, index, axis=0)
+
+        del self._inner_dict[filename]
+
     def __repr__(self) -> str:
         """Return a string representation of the object."""
         string = f"ImageTransforms object with {len(self._inner_dict)} entries of the type {self.frame_type}. "
 
         if self.manual_residuals is not None:
-            string += f"Residual error: {self.get_residual_rmse():.2f} px"
+            string += f"Manual residual error: {self.get_residual_rmse():.2f} px "
         if self.estimation_uncertainties is not None:
-            string += f"Mean uncertainty: {self.get_mean_uncertainty() * 100: .2f}%,"
-            string += f" max: {np.max(self.estimation_uncertainties) * 100:.2f}%"
+            string += f"Median estimated residual error: {np.nanmedian(self.estimation_uncertainties):.2f} px,"
+            string += f" max: {np.nanmax(self.estimation_uncertainties):.2f} px"
         return string
 
     def __iter__(self):
@@ -97,6 +108,41 @@ class ImageTransforms:
 
         for filename, transform in zip(filenames, transforms):
             self._inner_dict[filename] = transform
+
+    @staticmethod
+    def from_multiple(transform_objects):
+
+        frame_types: list[str] = []
+        manual_residuals = np.empty(shape=(0, 4))
+        estimated_residuals = np.empty(shape=(0, 4))
+        inner_dict: dict[str, skimage.transform.EuclideanTransform] = {}
+
+        for transform_object in transform_objects:
+            frame_types.append(transform_object.frame_type)
+            manual_residuals = np.append(
+                arr=manual_residuals,
+                values=transform_object.manual_residuals if transform_object.manual_residuals is not None else
+                np.empty(shape=(len(transform_object.keys()), 4)) + np.nan,
+                axis=0
+            )
+
+            estimated_residuals = np.append(
+                arr=estimated_residuals,
+                values=transform_object.estimation_uncertainties
+                if transform_object.estimation_uncertainties is not None else
+                np.empty(shape=(len(transform_object.keys()), 4)) + np.nan,
+                axis=0
+            )
+            inner_dict |= transform_object._inner_dict
+
+        frame_type = frame_types[0] if np.unique(frame_types).shape[0] == 1 else "mixed"
+
+        merged_transforms = ImageTransforms(frame_type)
+        merged_transforms._inner_dict = inner_dict
+        merged_transforms.add_residuals(manual_residuals)
+        merged_transforms.add_uncertainties(estimated_residuals)
+
+        return merged_transforms
 
     def keys(self) -> list[str]:
         """Return a list of the filenames."""
@@ -120,10 +166,11 @@ class ImageTransforms:
 
         :param uncertainties: A list of four uncertainties (for each fiducial) with the same len as the collection.
         """
-        if len(self._inner_dict) != len(uncertainties):
+        uncertainties_array = np.array(uncertainties)
+        if len(self._inner_dict) != uncertainties_array.shape[0]:
             raise ValueError("Uncertainties list does not match the length of the collection")
 
-        self.estimation_uncertainties = np.array(uncertainties)
+        self.estimation_uncertainties = uncertainties_array
 
     def get_mean_uncertainty(self) -> float:
         """Return the mean uncertainty of the collection."""
@@ -131,7 +178,7 @@ class ImageTransforms:
         if self.estimation_uncertainties is None:
             return np.NaN
 
-        return np.mean(self.estimation_uncertainties)
+        return np.nanmean(self.estimation_uncertainties)
 
     def get_outlier_filenames(self) -> np.ndarray:
         """Find the image filenames whose uncertainties are statistical outliers."""
@@ -145,11 +192,8 @@ class ImageTransforms:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             uncertainties = np.nanmax(self.estimation_uncertainties, axis=1)
-        median = np.nanmedian(uncertainties)
-        std = np.nanstd(uncertainties)
-        outlier_threshold = median + std * 2
 
-        return np.array(self.keys())[uncertainties > outlier_threshold]
+        return np.array(self.keys())[uncertainties > 47]
 
     def get_residual_rmse(self) -> float:
         """
@@ -160,7 +204,7 @@ class ImageTransforms:
         if self.manual_residuals is None:
             return np.NaN
 
-        return np.sqrt(np.mean(np.square(self.manual_residuals)))
+        return np.sqrt(np.nanmean(np.square(self.manual_residuals)))
 
 
 def make_reference_transforms(marked_fiducials: manual_picking.MarkedFiducials, frame_type: str) -> ImageTransforms:
@@ -421,7 +465,7 @@ class Fiducial:
 
 
 def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250,
-                      equalize: bool = True) -> dict[str, Fiducial]:
+                      threshold: bool = False) -> dict[str, Fiducial]:
     """
     Extract all four fiducials from an image.
 
@@ -451,11 +495,14 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
         # Extract the fiducial part of the image
         fiducial = image[fiducial_bounds.as_slice()]
         # Optionally stretch the lighness to between the 1st and 99th percentile of the lightness
-        if equalize:
-            max_value = np.percentile(fiducial.flatten(), 95)
-            min_value = np.percentile(fiducial.flatten(), 5)
-            fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
-                               a_min=0, a_max=255).astype(fiducial.dtype)
+        if threshold:
+            min_value = np.percentile(fiducial.flatten(), 10)
+            fiducial = cv2.threshold(
+                src=np.clip(fiducial - min_value, a_min=0, a_max=255),
+                thresh=40,
+                maxval=255,
+                type=cv2.THRESH_BINARY
+            )[1].astype(fiducial.dtype)
 
         # Make a new fiducial instance and add it to the output dictionary
         fiducials[corner] = Fiducial(
@@ -490,7 +537,7 @@ def get_fiducial_templates(transforms: ImageTransforms, frame_type: str, instrum
     reference_frame = generate_reference_frame(transforms)
 
     # Extract fiducials in predefined places from the frame
-    fiducials = extract_fiducials(reference_frame, frame_type=frame_type, window_size=250, equalize=False)
+    fiducials = extract_fiducials(reference_frame, frame_type=frame_type, window_size=250)
 
     if cache:
         os.makedirs(CACHE_FILES["fiducial_template_dir"], exist_ok=True)
@@ -535,7 +582,7 @@ def match_templates(filenames: list[str], frame_type: str, instrument: str, temp
         """
         image = load_image(filename)
         # Extract a larger window than the default (500 vs 250) for the image to match the fiducial templates on.
-        fiducials = extract_fiducials(image, frame_type=frame_type, window_size=500, equalize=True)
+        fiducials = extract_fiducials(image, frame_type=frame_type, window_size=500, threshold=True)
 
         original_positions = []
         new_positions = []
@@ -549,16 +596,37 @@ def match_templates(filenames: list[str], frame_type: str, instrument: str, temp
             uncertainties.append(uncertainty)
 
         # Estimate a transform using the x/y-swapped source and destination positions.
-        transform = skimage.transform.estimate_transform(
-            ttype="euclidean",
-            src=np.array(new_positions)[:, ::-1],
-            dst=np.array(original_positions)[:, ::-1]
-        )
-        progress_bar.update()
+        # Some warnings show up when RANSAC gets too few inliers, but it will in a different iteration.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            transform, inliers = skimage.measure.ransac(
+                data=(
+                    np.array(new_positions)[:, ::-1],
+                    np.array(original_positions)[:, ::-1]
+                ),
+                model_class=skimage.transform.EuclideanTransform,
+                min_samples=3,  # At least three points should be used
+                stop_sample_num=1,  # If it finds one good outlier, it stops.
+                residual_threshold=CONSTANTS.transform_outlier_threshold  # A threshold of 5 px is the outlier threshold
+            )
+            # If a transform was not possible to estimate using RANSAC (probably due to more than one outlier),
+            # estimate one anyway. This will have large residuals which can later be excluded.
+            if np.any(np.isnan(transform.params)):
+                transform = skimage.transform.estimate_transform(
+                    ttype="euclidean",
+                    src=np.array(new_positions)[:, ::-1],
+                    dst=np.array(original_positions)[:, ::-1]
+                )
+                inliers = np.array([True, True, True, True])
 
         # Calculate residuals by subtracting the actual estimated positions with those made from the transform
         # These should be close to zero if the fiducials were marked perfectly
-        residuals = np.array(new_positions) - transform.inverse(np.array(original_positions)[:, ::-1])[:, ::-1]
+        residuals = np.linalg.norm(np.array(new_positions) -
+                                   transform.inverse(np.array(original_positions)[:, ::-1])[:, ::-1], axis=1)
+        residuals[~inliers] = np.nan  # pylint: disable=invalid-unary-operand-type
+        assert residuals.shape == (4,), f"Residuals have weird shape: {residuals.shape}"
+        assert ~np.any(np.isnan(transform.params)), f"Params for {filename} are NaNs"
+        progress_bar.update()
         return transform, residuals
 
     uncertainties: list[list[float]] = []
@@ -615,10 +683,18 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     # This is a temporary fix.
     # The attribute matching_uncertainties was renamed to estimation_uncertainties after some transforms were estimated.
     # Therefore, some of the pickled results still have the old name..
+    # After a new estimation, this should be removed (2020-12-08)
     try:
         getattr(estimated_transforms, "estimation_uncertainties")
     except AttributeError:
         estimated_transforms.estimation_uncertainties = estimated_transforms.matching_uncertainties  # type: ignore
+
+    # This is a temporary fix
+    # The uncertainties were not normalized in x/y, so the resultant shape was (X, 4, 2) when it should have been (X, 4)
+    # After another estimation, this should be removed (2020-12-08)
+    if len(estimated_transforms.estimation_uncertainties.shape) == 3:  # type: ignore
+        estimated_transforms.estimation_uncertainties = np.linalg.norm(
+            estimated_transforms.estimation_uncertainties, axis=2)
 
     # Get the filenames that were estimated poorly
     estimated_outliers = estimated_transforms.get_outlier_filenames()
@@ -706,13 +782,16 @@ def compare_transforms(reference_transforms: ImageTransforms, compared_transform
         compared_points = compared_transforms[filename](start_coords)
 
         rms = np.sqrt(np.mean(np.square(np.linalg.norm(compared_points - reference_points, axis=1))))
-        print(f"\t{filename}: {rms}")
 
-        uncertainties.append(np.linalg.norm(
-            compared_transforms.estimation_uncertainties[compared_transforms.keys().index(filename)]))  # type: ignore
+        estimated_residuals = compared_transforms.estimation_uncertainties[
+            compared_transforms.keys().index(filename)]  # type: ignore
+        uncertainties.append(np.linalg.norm(estimated_residuals[~np.isnan(estimated_residuals)]))
 
         rmses.append(rms)
 
+    return np.mean(rms)
+
+    return
     plt.scatter(uncertainties, rmses)
     ylim = plt.gca().get_ylim()
     xlim = plt.gca().get_xlim()
@@ -723,7 +802,7 @@ def compare_transforms(reference_transforms: ImageTransforms, compared_transform
     plt.show()
 
 
-def get_all_frame_type_transforms(complement: bool = False):
+def get_all_frame_type_transforms(complement: bool = False, verbose: bool = True):
     marked_fiducials = manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"])
     instruments = marked_fiducials.get_instrument_frame_type_relation()
 
@@ -758,6 +837,19 @@ def get_all_frame_type_transforms(complement: bool = False):
         ) for instrument in instruments
     }
 
+    # Below may be temporary due to an error that probably has been fixed
+    fixed = 0
+    for instrument in instruments:
+        for filename in estimated_transforms[instrument].keys():
+            if np.any(np.isnan(estimated_transforms[instrument][filename].params)):
+                fixed += 1
+                estimated_transforms[instrument][filename] = skimage.transform.EuclideanTransform(rotation=0)
+                estimated_transforms[instrument].estimation_uncertainties[
+                    estimated_transforms[instrument].keys().index(filename)
+                ] = [1e3, 1e3, 1e3, 1e3]
+
+    print(f"FIXED {fixed} transforms")
+
     merged_transforms = {
         instrument: merge_manual_and_estimated_transforms(
             manual_transforms[instrument],
@@ -765,25 +857,40 @@ def get_all_frame_type_transforms(complement: bool = False):
         ) for instrument in instruments
     }
 
-    print(merged_transforms)
+    if verbose:
+        rmses: list[float] = []
+        for instrument in instruments:
+            rms = compare_transforms(manual_transforms[instrument], estimated_transforms[instrument])
+            rmses.append(rms)
+            print(f"{instrument} manual-to-estimated error: {rms:.2f} px")
+        print(f"\nMean manual-to-estimated error: {np.mean(rmses):.2f} px\n")
 
-    return
+        for key in merged_transforms:
+            print(key, "\t", merged_transforms[key])
 
-    print("\nLooking for outliers")
-    total_outliers = 0
-    for frame_type in merged_transforms:
-        n_outliers = len(merged_transforms[frame_type].get_outlier_filenames())
-        print(f"\t{frame_type} has {n_outliers} outlier(s)")
-        total_outliers += n_outliers
+        print("\nLooking for outliers")
+        total_outliers = 0
+        for frame_type in merged_transforms:
+            n_outliers = len(merged_transforms[frame_type].get_outlier_filenames())
+            if n_outliers == 0:
+                continue
+            print(f"\t{frame_type} has {n_outliers} outlier(s)")
+            total_outliers += n_outliers
 
-    print(f"There are {total_outliers} outlier(s) in total")
+        if total_outliers != 0:
+            print(f"There are {total_outliers} outlier(s) in total")
 
     if complement:
-        for frame_type in merged_transforms:
-            manual_transforms = make_reference_transforms(marked_fiducials, frame_type)
+        for instrument in instruments:
+            outliers = merged_transforms[instrument].get_outlier_filenames()
 
-            manually_complement_matching(manual_transforms, estimated_transforms=merged_transforms[frame_type])
+            if len(outliers) == 0:
+                continue
+            manual_picking.gui(instrument_type=instruments[instrument],
+                               filenames=outliers)
+
+    return ImageTransforms.from_multiple(list(merged_transforms.values()))
 
 
 if __name__ == "__main__":
-    get_all_frame_type_transforms(complement=False)
+    print(get_all_frame_type_transforms(complement=True, verbose=True))
