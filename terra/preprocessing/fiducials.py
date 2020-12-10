@@ -193,7 +193,7 @@ class ImageTransforms:
             warnings.simplefilter("ignore")
             uncertainties = np.nanmax(self.estimation_uncertainties, axis=1)
 
-        return np.array(self.keys())[uncertainties > 47]
+        return np.array(self.keys())[uncertainties > 47 * 2]
 
     def get_residual_rmse(self) -> float:
         """
@@ -236,7 +236,8 @@ def make_reference_transforms(marked_fiducials: manual_picking.MarkedFiducials, 
     for filename in filenames:
         # Find the latest fiducla
         fiducials: dict[str, manual_picking.FiducialMark] = {
-            corner: mark for corner, mark in marked_fiducials.get_fiducial_marks(filename).items() if mark is not None
+            corner: mark for corner, mark in marked_fiducials.get_fiducial_marks(filename).items()
+            if mark is not None and mark.x_position is not None
         }
 
         # Only continue if all the fiducials are marked
@@ -496,13 +497,16 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
         fiducial = image[fiducial_bounds.as_slice()]
         # Optionally stretch the lighness to between the 1st and 99th percentile of the lightness
         if threshold:
-            min_value = np.percentile(fiducial.flatten(), 10)
-            fiducial = cv2.threshold(
-                src=np.clip(fiducial - min_value, a_min=0, a_max=255),
-                thresh=40,
-                maxval=255,
-                type=cv2.THRESH_BINARY
-            )[1].astype(fiducial.dtype)
+            min_value = np.percentile(fiducial.flatten(), 20)
+            max_value = np.percentile(fiducial.flatten(), 90)
+            fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
+                               a_min=0, a_max=255).astype(fiducial.dtype)
+            # fiducial = cv2.threshold(
+            #    src=np.clip(fiducial - min_value, a_min=0, a_max=255),
+            #    thresh=40,
+            #    maxval=255,
+            #    type=cv2.THRESH_BINARY
+            # )[1].astype(fiducial.dtype)
 
         # Make a new fiducial instance and add it to the output dictionary
         fiducials[corner] = Fiducial(

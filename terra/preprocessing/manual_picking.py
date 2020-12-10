@@ -45,9 +45,10 @@ def get_fiducials(filepath: str) -> dict[str, bytes]:
         fiducial = image[coord[0] - WINDOW_RADIUS: coord[0] + WINDOW_RADIUS,
                          coord[1] - WINDOW_RADIUS: coord[1] + WINDOW_RADIUS]
 
+        fiducial = cv2.medianBlur(fiducial, 5)
         # Increase the contrast
-        max_value = np.percentile(fiducial.flatten(), 95)
-        min_value = np.percentile(fiducial.flatten(), 5)
+        max_value = np.percentile(fiducial.flatten(), 80)
+        min_value = np.percentile(fiducial.flatten(), 20)
         fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
                            a_min=0, a_max=255).astype(fiducial.dtype)
 
@@ -141,7 +142,7 @@ class MarkedFiducials:
                         row[key] = int(row[key])  # type: ignore
                     # If it can't be converted to an integer, it's either a string or a string called "None"
                     except ValueError:
-                        if row[key] == "None":  # Convert a "None" string to a NoneType
+                        if row[key] == "None" or row[key] == "":  # Convert a "None" string to a NoneType
                             row[key] = None  # type: ignore
                         continue
 
@@ -308,7 +309,11 @@ def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
     )
 
     # Make a window with a temporary title, using the grid that was just made
-    window = sg.Window(title="Hello there", layout=[grid], return_keyboard_events=True)
+    window = sg.Window(
+        title=f"Examining {filenames[0]} (1/{len(filenames)}) on {instrument_type}",
+        layout=[grid],
+        return_keyboard_events=True
+    )
     # Finalize it for whatever reason. TODO: Try removing this and see what happens
     window.Finalize()
 
@@ -382,7 +387,8 @@ def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
             # Draw the new image
             draw_image_by_index(image_index, filepaths, window, marked_fiducial_points, marked_fiducial_circles)
             # Set the title appropriately
-            window.set_title(f"Examining {filenames[image_index]}")
+            window.set_title(
+                f"Examining {filenames[image_index]} ({image_index + 1}/{len(filenames)}) on {instrument_type}")
             # Get potential previous fiducials
             saved_fiducials = marked_fiducials.get_fiducial_marks(filenames[image_index])
             # First set the pressed type to the default value, then check if a non-default value was saved before.
