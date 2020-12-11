@@ -1,17 +1,16 @@
-
+"""Functions to handle and estimate fiducial locations for the internal orientation of the images."""
 import concurrent.futures
+import csv
 import json
 import os
 import pickle
 import warnings
-from typing import Optional
+from typing import Optional, Union
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import skimage.measure
 import skimage.transform
-import statictypes
 from tqdm import tqdm
 
 from terra import files
@@ -21,7 +20,10 @@ from terra.preprocessing import image_meta, manual_picking
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "fiducials")
 CACHE_FILES = {
     "fiducial_template_dir": os.path.join(TEMP_DIRECTORY, "templates"),
+    "fiducial_location_dir": os.path.join(TEMP_DIRECTORY, "locations"),
 }
+# Define the order in which fiducial corners are considered.
+CORNERS = ["left", "right", "top", "bottom"]
 
 
 # TODO: Maybe replace hardcoded fiducial locations with ones estimated from the manual picking?
@@ -51,10 +53,9 @@ class ImageTransforms:
 
         # Residuals may be added lateGggr
         self.manual_residuals: Optional[np.ndarray] = None
-        self.estimation_uncertainties: Optional[np.ndarray] = None
+        self.estimated_residuals: Optional[np.ndarray] = None
         # self.error: Optional[list[float]] = None
 
-    @statictypes.enforce
     def __setitem__(self, filename: str, transform: skimage.transform.EuclideanTransform) -> None:
         """
         Add or modify an item to the collection.
@@ -63,30 +64,31 @@ class ImageTransforms:
         """
         self._inner_dict[filename] = transform
 
-    @statictypes.enforce
     def __getitem__(self, filename: str) -> skimage.transform.EuclideanTransform:
         """Retrieve an item from the collection."""
         return self._inner_dict[filename]
 
     def __delitem__(self, filename: str):
+        """Remove an item and its corresponding values from the collection."""
         index = self.keys().index(filename)
-        if self.estimation_uncertainties is not None:
-            self.estimation_uncertainties = np.delete(self.estimation_uncertainties, index, axis=0)
+        if self.estimated_residuals is not None:
+            self.estimated_residuals = np.delete(self.estimated_residuals, index, axis=0)
 
         if self.manual_residuals is not None:
-            self.manual_residuals = np.delete(self.estimation_uncertainties, index, axis=0)
+            self.manual_residuals = np.delete(self.estimated_residuals, index, axis=0)
 
         del self._inner_dict[filename]
 
     def __repr__(self) -> str:
         """Return a string representation of the object."""
-        string = f"ImageTransforms object with {len(self._inner_dict)} entries of the type {self.frame_type}. "
+        string = f"ImageTransforms object with {len(self._inner_dict)} entries of the type {self.frame_type}."
 
         if self.manual_residuals is not None:
-            string += f"Manual residual error: {self.get_residual_rmse():.2f} px "
-        if self.estimation_uncertainties is not None:
-            string += f"Median estimated residual error: {np.nanmedian(self.estimation_uncertainties):.2f} px,"
-            string += f" max: {np.nanmax(self.estimation_uncertainties):.2f} px"
+            string += f" Median manual residual error: {np.nanmedian(self.manual_residuals):.2f} px,"
+            string += f" max: {np.nanmax(self.manual_residuals):.2f} px."
+        if self.estimated_residuals is not None:
+            string += f" Median estimated residual error: {np.nanmedian(self.estimated_residuals):.2f} px,"
+            string += f" max: {np.nanmax(self.estimated_residuals):.2f} px"
         return string
 
     def __iter__(self):
@@ -111,12 +113,21 @@ class ImageTransforms:
 
     @staticmethod
     def from_multiple(transform_objects):
+        """
+        Merge multiple ImageTransforms objects into one new object.
 
+        :param transform_objects: An iterable of transform objects to merge.
+        :type transform_objects: Iterable of ImageTransforms objects.
+
+        :returns: A new merged ImageTransforms object.
+        """
+        # Create new empty attributes which will gradually be filled.
         frame_types: list[str] = []
         manual_residuals = np.empty(shape=(0, 4))
         estimated_residuals = np.empty(shape=(0, 4))
         inner_dict: dict[str, skimage.transform.EuclideanTransform] = {}
 
+        # Fill the above attributes with the transform_objects' values.
         for transform_object in transform_objects:
             frame_types.append(transform_object.frame_type)
             manual_residuals = np.append(
@@ -128,19 +139,21 @@ class ImageTransforms:
 
             estimated_residuals = np.append(
                 arr=estimated_residuals,
-                values=transform_object.estimation_uncertainties
-                if transform_object.estimation_uncertainties is not None else
+                values=transform_object.estimated_residuals
+                if transform_object.estimated_residuals is not None else
                 np.empty(shape=(len(transform_object.keys()), 4)) + np.nan,
                 axis=0
             )
-            inner_dict |= transform_object._inner_dict
+            # Sorry, pylint
+            inner_dict |= transform_object._inner_dict  # pylint: disable=protected-access
 
+        # Set the frame type to be "mixed" if there is more than one unique frame type
         frame_type = frame_types[0] if np.unique(frame_types).shape[0] == 1 else "mixed"
 
         merged_transforms = ImageTransforms(frame_type)
-        merged_transforms._inner_dict = inner_dict
-        merged_transforms.add_residuals(manual_residuals)
-        merged_transforms.add_uncertainties(estimated_residuals)
+        merged_transforms._inner_dict = inner_dict  # Why is pylint not complaining here??
+        merged_transforms.add_manual_residuals(manual_residuals)
+        merged_transforms.add_estimated_residuals(estimated_residuals)
 
         return merged_transforms
 
@@ -148,7 +161,7 @@ class ImageTransforms:
         """Return a list of the filenames."""
         return list(self._inner_dict.keys())
 
-    def add_residuals(self, residuals: np.ndarray) -> None:
+    def add_manual_residuals(self, residuals: np.ndarray) -> None:
         """
         Add residuals (alignment errors) to the collection.
 
@@ -160,38 +173,31 @@ class ImageTransforms:
 
         self.manual_residuals = residuals
 
-    def add_uncertainties(self, uncertainties: list[list[float]]) -> None:
+    def add_estimated_residuals(self, residuals: list[list[float]]) -> None:
         """
-        Add feature-matching related uncertainties to the collection.
+        Add residuals from estimate transforms to the collection.
 
-        :param uncertainties: A list of four uncertainties (for each fiducial) with the same len as the collection.
+        :param residuals: A list of four residual (for each fiducial) with the same len as the collection.
         """
-        uncertainties_array = np.array(uncertainties)
-        if len(self._inner_dict) != uncertainties_array.shape[0]:
-            raise ValueError("Uncertainties list does not match the length of the collection")
+        residual_array = np.array(residuals)
+        if len(self._inner_dict) != residual_array.shape[0]:
+            raise ValueError("Residual list does not match the length of the collection")
 
-        self.estimation_uncertainties = uncertainties_array
-
-    def get_mean_uncertainty(self) -> float:
-        """Return the mean uncertainty of the collection."""
-
-        if self.estimation_uncertainties is None:
-            return np.NaN
-
-        return np.nanmean(self.estimation_uncertainties)
+        self.estimated_residuals = residual_array
 
     def get_outlier_filenames(self) -> np.ndarray:
         """Find the image filenames whose uncertainties are statistical outliers."""
-        if self.estimation_uncertainties is None:
+        if self.estimated_residuals is None:
             raise ValueError("No uncertainties exist")
 
-        if np.all(np.isnan(self.estimation_uncertainties)):
+        if np.all(np.isnan(self.estimated_residuals)):
             return np.array([])
 
         # Get the maximum uncertainty for each image
+        # It will warn if the residuals of all cornerns is NaN, which is completely normal.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            uncertainties = np.nanmax(self.estimation_uncertainties, axis=1)
+            uncertainties = np.nanmax(self.estimated_residuals, axis=1)
 
         return np.array(self.keys())[uncertainties > 47 * 2]
 
@@ -207,33 +213,24 @@ class ImageTransforms:
         return np.sqrt(np.nanmean(np.square(self.manual_residuals)))
 
 
-def make_reference_transforms(marked_fiducials: manual_picking.MarkedFiducials, frame_type: str) -> ImageTransforms:
+def get_median_fiducial_locations(marked_fiducials: manual_picking.MarkedFiducials) -> np.ndarray:
     """
-    Generate reference transforms from manually placed fiducial marks.
+    Find the median location of the marked fiducials.
 
-    The centre is defined as the mean coordinate of the top and bottom fiducial.
-    First, rotations between left-right and bottom-top are estimated and accounted for (they should be near 0).
-    Then, they are shifted to a common centre, which is the median of the top-bottom mean centres.
+    All fiducial marks in marked_fiducials should have the same frame type (through "marked_fiducials.subset()").
 
-    :param fiducial_marks: An instance of the marked fiducial collection.
-    :param frame_type: The name of the frame type to look for.
-
-    :returns: A collection of image transforms made from the marked fiducials.
+    :param marked_fiducials: Marked fiducials of the same frame type.
+    :returns: A numpy array of shape (4, 2) of the left, right, top, and bottom fiducials, respectively.
     """
-    filenames = marked_fiducials.get_filenames_for_frame_type(frame_type)
+    # Get the filenames for the marked fiducials
+    filenames = np.unique([mark.filename for mark in marked_fiducials.fiducial_marks])
 
-    if len(filenames) == 0:
-        raise ValueError(f"No filenames of frame type: {frame_type}")
+    # Instantiate an array of de-rotated fiducial positions.
+    de_rotated_positions = np.empty(shape=(filenames.shape[0], 4, 2))
 
-    # Instantiate dictionaries of original and corrected positions. These will be used to estimate transforms.
-    original_positions: dict[str, np.ndarray] = {}
-    corrected_positions: dict[str, np.ndarray] = {}
-    # Define the order in which the corners are represented
-    corners = ["left", "right", "top", "bottom"]
-
-    # Estimate the rotational offset of images with valid fiducial marks.
-    # The ones that are valid get an original and (not yet finished) corrected position entry in the above dicts.
-    for filename in filenames:
+    # Go through each filename and try to remove the rotational component of the offset.
+    # This is done by correcting the left-right and top-bottom angles.
+    for i, filename in enumerate(filenames):
         # Find the latest fiducla
         fiducials: dict[str, manual_picking.FiducialMark] = {
             corner: mark for corner, mark in marked_fiducials.get_fiducial_marks(filename).items()
@@ -256,66 +253,126 @@ def make_reference_transforms(marked_fiducials: manual_picking.MarkedFiducials, 
             float(fiducials["top"].y_position - fiducials["bottom"].y_position)  # type: ignore
         ) if (fiducials["top"].x_position - fiducials["bottom"].x_position) != 0 else 0.0  # type:ignore
 
-        # TODO: Save the vertical and horizontal angle difference.
+        # TODO: Save the vertical and horizontal angle difference?
 
         # Make a rotational transform from the angles (used to correct the points)
         rotation_transform = skimage.transform.EuclideanTransform(rotation=np.mean([horizontal_angle, vertical_angle]))
 
         # Make empty entires for the original and corrected positions (axis 0 are the corners, axis1 are the y/x coords)
-        original_positions[filename] = np.empty(shape=(4, 2))
-        corrected_positions[filename] = original_positions[filename].copy()
         # Go through each fiducial and add its original and corrected positions to the filename entry
-        for i, corner in enumerate(corners):
-            original_positions[filename][i, :] = [fiducials[corner].y_position, fiducials[corner].x_position]
-            # The transform object wants x/y coordinates, so ::-1 has to be made to switch the two coordinates.
-            new_x, new_y = rotation_transform.inverse(original_positions[filename][i, ::-1])[0]
-            corrected_positions[filename][i, :] = [new_y, new_x]
+        for j, corner in enumerate(CORNERS):
+            new_x, new_y = rotation_transform.inverse([fiducials[corner].x_position, fiducials[corner].y_position])[0]
+            de_rotated_positions[i, j, :] = [new_y, new_x]
 
-    # Find the centre of the mean top and bottom coordinates between all images.
-    top_bottom = [corners.index("top"), corners.index("bottom")]
-    centre = np.mean([coordinate[top_bottom, :].mean(axis=0)
-                      for coordinate in corrected_positions.values()], axis=0)
+    # Get the median positions of the de-rotated fiducial locations
+    median_fiducial_locations = np.median(de_rotated_positions, axis=0)
 
-    # Correct all the x and y offsets of the fiducial locations
-    for filename in corrected_positions:
-        corrected_positions[filename] -= corrected_positions[filename][top_bottom, :].mean(axis=0) - centre
+    return median_fiducial_locations
 
-    # Find the residuals after the above correction
-    values = np.array(list(corrected_positions.values()))
-    residuals = np.linalg.norm(values - np.median(values, axis=0), axis=2)
 
-    # Mark all entries as outliers whose residuals are too large
-    inliers: list[int] = []
-    outliers: list[str] = []
-    for i, filename in enumerate(list(corrected_positions.keys())):
-        if np.mean(residuals[i]) > 5:
-            outliers.append(filename)
-        else:
-            inliers.append(i)
+def calculate_manual_transforms(marked_fiducials: manual_picking.MarkedFiducials, frame_type: str) -> ImageTransforms:
+    """
+    Generate reference transforms from manually placed fiducial marks.
+
+    The centre is defined as the mean coordinate of the top and bottom fiducial.
+    First, rotations between left-right and bottom-top are estimated and accounted for (they should be near 0).
+    Then, they are shifted to a common centre, which is the median of the top-bottom mean centres.
+
+    :param fiducial_marks: An instance of the marked fiducial collection.
+    :param frame_type: The name of the frame type to look for.
+
+    :returns: A collection of image transforms made from the marked fiducials.
+    """
+    filenames = marked_fiducials.get_filenames_for_frame_type(frame_type)
+
+    if len(filenames) == 0:
+        raise ValueError(f"No filenames of frame type: {frame_type}")
+
+    median_fiducial_locations = get_median_fiducial_locations(marked_fiducials.subset(filenames))
 
     # Make a new image transforms collection instance
     image_transforms = ImageTransforms(frame_type=frame_type)
-    # Loop over the filenames in the corrected_positions collection and remove outliers.
-    for filename in corrected_positions:
-        if filename in outliers:
-            continue
-        # Make x/y source and destination coordinates to estimate the transform with.
-        source_coords = original_positions[filename][:, ::-1]
-        destination_coords = corrected_positions[filename][:, ::-1]
+    residuals: list[np.ndarray] = []
 
-        # Estimate the transform and add it to the new instance.
-        transform = skimage.transform.estimate_transform("euclidean", source_coords, destination_coords)
+    # Loop over the filenames and estimate transforms for them.
+    for filename in filenames:
+        fiducial_marks = marked_fiducials.get_fiducial_marks(filename)
+
+        # Get the source coordinates for the transform estimation.
+        all_source_coords = np.array([
+            ([fiducial_marks[corner].x_position, fiducial_marks[corner].y_position]
+             if (fiducial_marks[corner] is not None and fiducial_marks[corner].x_position is not None)
+             else [np.nan, np.nan]) for corner in CORNERS
+        ])
+        missing_values = np.isnan(np.mean(all_source_coords, axis=1))
+
+        # Skip if two or fewer fiducials were marked.
+        if np.count_nonzero(missing_values) > 1:
+            continue
+
+        source_coords = all_source_coords[~missing_values]
+        destination_coords = median_fiducial_locations[~missing_values, ::-1]
+
+        # If only three fiducials are marked, estimate a transform directly.
+        ransac: bool = np.count_nonzero(missing_values) == 0
+
+        # If four exist, estimate using RANSAC (possibly removing ONE outlier)
+        # RANSAC may fail (sometimes with warnings, sometimes not). If so, fallback to the rigid method
+        if ransac:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                transform, inliers = skimage.measure.ransac(
+                    data=(
+                        source_coords,
+                        destination_coords
+                    ),
+                    model_class=skimage.transform.EuclideanTransform,
+                    min_samples=3,  # At least three points should be used
+                    stop_sample_num=1,  # If it finds one good outlier, it stops.
+                    residual_threshold=CONSTANTS.transform_outlier_threshold)
+
+                # If the transform params are NaNs (silent RANSAC failure), estimate a transform again without it.
+                if np.any(np.isnan(transform.params)):
+                    ransac = False
+
+        # Estimate a transform without RANSAC if too few points are available or if RANSAC failed.
+        if not ransac:
+            transform = skimage.transform.estimate_transform("euclidean", source_coords, destination_coords)
+            inliers = ~missing_values
+
+        if np.any(np.isnan(transform.params)):
+            raise ValueError(f"Transform was not estimated for {filename}: {transform}")
+
+        # Now, two validation masks exist, so combine these into one.
+        valid_mask = np.logical_or(missing_values, ~inliers)  # pylint: disable=invalid-unary-operand-type
+        # Estimate the residuals on each valid point.
+        residual = np.linalg.norm(median_fiducial_locations[~valid_mask, ::-1] -
+                                  transform(all_source_coords)[~valid_mask], axis=1)
+
+        # If there were invalid values, the residual array has to be filled with NaNs to have residual.shape[0] == 4
+        for i, potential_nan in enumerate(valid_mask):
+            if potential_nan:
+                residual = np.insert(arr=residual, obj=i, values=np.nan)
+
+        # Increase the residuals if marked fiducials are missing (if one is missing, multiply by two)
+        residual *= np.count_nonzero(missing_values) + 1
+
+        # Toss the results if they weren't good enough  # TODO: Remove the 4 multiplier for errors
+        if np.mean(residual) > CONSTANTS.transform_outlier_threshold * 4:
+            continue
+        # Otherwise, save them
+        residuals.append(residual)
         image_transforms[filename] = transform
 
     # Add the residuals of the inliers for later analysis
-    image_transforms.add_residuals(residuals[inliers])
+    image_transforms.add_manual_residuals(np.array(residuals))
 
     return image_transforms
 
 
 def load_image(filename: str) -> np.ndarray:
     """
-    Load an image from its base filename (exluding the folder path).
+    Load an image from its base filename(exluding the folder path).
 
     :param filename: The name of the image.
     """
@@ -353,7 +410,7 @@ def generate_reference_frame(image_transforms: ImageTransforms) -> np.ndarray:
     First, the images are transformed, then they are compared to each other and thresholded to extract the frame.
 
     :param manual_transforms: Transforms of the same frame type.
-    :returns: A binary (0/255) mask of the reference frame.
+    :returns: A binary(0/255) mask of the reference frame.
     """
     # Set the shape of all the images to match the first one. TODO: Make this an argument?
     first_image = load_image(image_transforms.keys()[0])
@@ -367,7 +424,7 @@ def generate_reference_frame(image_transforms: ImageTransforms) -> np.ndarray:
         """
         Load and transform an image in one thread.
 
-        :param filename: The filename (excluding the directory path) to load.
+        :param filename: The filename(excluding the directory path) to load.
         :returns: The transformed image.
         """
         image = load_image(filename)
@@ -390,41 +447,55 @@ def generate_reference_frame(image_transforms: ImageTransforms) -> np.ndarray:
 
 
 class Bounds:  # pylint: disable=too-few-public-methods
-    """Image bounds object"""
+    """Image bounds object for fiducial image extent calculations."""
 
     def __init__(self, top: int, bottom: int, left: int, right: int):
+        """Create a new bounds object from the bounding coordinates."""
         self.top = top
         self.bottom = bottom
         self.left = left
         self.right = right
 
     def __str__(self) -> str:
+        """Return a json string version of the bounds object."""
         return json.dumps(self.as_dict())
 
     def as_dict(self) -> dict[str, int]:
+        """Convert the bounds object to a dictionary."""
         return {"top": self.top, "bottom": self.bottom, "left": self.left, "right": self.right}
 
     def as_slice(self) -> np.lib.index_tricks.IndexExpression:
-        """Convert the bounds object to a numpy slice"""
+        """Convert the bounds object to a numpy slice."""
         return np.s_[self.top:self.bottom, self.left:self.right]
 
     def as_plt_extent(self) -> tuple[int, int, int, int]:
-
+        """Convert the bounds object to an extent for matplotlib."""
         return (self.left, self.right, self.bottom, self.top)
 
 
 class Fiducial:
+    """An extracted fiducial object which can be matched to another one."""
 
     def __init__(self, corner: str, fiducial_image: np.ndarray, bounds: Bounds, center: tuple[int, int]):
+        """
+        Instantiate a new Fiducial object.
+
+        :param corner: The corner (left, right, top, bottom) of the fiducial.
+        :param fiducial_image: The image data (the picture) of the fiducial.
+        :param bounds: The bounds of the image data in the non-extracted image coordinates.
+        :param center: The center of the fiducial (center of the bounds if it wasn't cropped by an image edge).
+        """
         self.corner = corner
         self.fiducial_image = fiducial_image
         self.bounds = bounds
         self.center = center
 
     def __repr__(self) -> str:
+        """Return a string representation of the object."""
         return f"{self.corner.capitalize()} fiducial with bounds: {self.bounds}"
 
     def index(self, y_index, x_index) -> tuple[int, int]:
+        """Convert fiducial image coordinates to non-extracted image coordinates."""
         return self.bounds.top + y_index, self.bounds.left + x_index
 
     def match(self, other_fiducial) -> tuple[tuple[int, int], float]:
@@ -432,7 +503,7 @@ class Fiducial:
         Match a fiducial to another fiducial.
 
         The other fiducial needs to have a smaller image shape than 'self'.
-        The returned error is the fraction of pixels within a 5% likelihood to also be a match (lower is better).
+        The returned error is the fraction of pixels within a 5 % likelihood to also be a match (lower is better).
 
         :param other_fiducial: Another fiducial instance.
         :returns: The estimated center of the other fiducial after matching, and the uncertianty of the match.
@@ -466,7 +537,7 @@ class Fiducial:
 
 
 def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250,
-                      threshold: bool = False) -> dict[str, Fiducial]:
+                      equalize: bool = False) -> dict[str, Fiducial]:
     """
     Extract all four fiducials from an image.
 
@@ -496,7 +567,7 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
         # Extract the fiducial part of the image
         fiducial = image[fiducial_bounds.as_slice()]
         # Optionally stretch the lighness to between the 1st and 99th percentile of the lightness
-        if threshold:
+        if equalize:
             min_value = np.percentile(fiducial.flatten(), 20)
             max_value = np.percentile(fiducial.flatten(), 90)
             fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
@@ -519,22 +590,24 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
     return fiducials
 
 
-def get_fiducial_templates(transforms: ImageTransforms, frame_type: str, instrument: str, cache=True) -> dict[str, Fiducial]:
+def get_fiducial_templates(transforms: ImageTransforms, frame_type: str,
+                           instrument: str, cache=True) -> dict[str, Fiducial]:
     """
     Construct or load fiducial templates from every image with manually picked fiducial marks.
 
     :param transforms: Manual transforms to align the images with.
     :param frame_type: The frame type of the images.
-    :param cache: Whether to load and save cached results (this may take a while).
+    :param cache: Whether to load and save cached results(this may take a while).
 
-    :returns: A dictionary of fiducial templates (Fiducial objects) for every corner.
+    :returns: A dictionary of fiducial templates(Fiducial objects) for every corner.
     """
     # Define the filepath to look for / save / ignore the cache file
     cache_filepath = os.path.join(CACHE_FILES["fiducial_template_dir"], instrument + ".pkl")
 
     # Return a cached version if it exists and should be used.
     if cache and os.path.isfile(cache_filepath):
-        return pickle.load(open(cache_filepath, mode="rb"))
+        with open(cache_filepath, "rb") as infile:
+            return pickle.load(infile)
 
     print(f"Generating new fiducial templates for {instrument}")
     # Generate a reference frame from the manually picked fiducial positions.
@@ -550,9 +623,16 @@ def get_fiducial_templates(transforms: ImageTransforms, frame_type: str, instrum
             pickle.dump(fiducials, outfile)
 
         # Save previews of the templates for debugging/visualisation purposes
+        preview_dir = os.path.join(CACHE_FILES["fiducial_template_dir"], "previews")
+        os.makedirs(preview_dir, exist_ok=True)
         for corner in fiducials:
-            cv2.imwrite(os.path.join(CACHE_FILES["fiducial_template_dir"],
+            cv2.imwrite(os.path.join(preview_dir,
                                      f"{instrument}_{corner}_preview.jpg"), fiducials[corner].fiducial_image)
+
+        frame_dir = os.path.join(CACHE_FILES["fiducial_template_dir"], "image_frames")
+        os.makedirs(frame_dir, exist_ok=True)
+        cv2.imwrite(os.path.join(frame_dir, f"frame_{instrument}.tif"), reference_frame)
+
     return fiducials
 
 
@@ -564,14 +644,15 @@ def match_templates(filenames: list[str], frame_type: str, instrument: str, temp
     :param filenames: A list of filenames to analyse.
     :param frame_type: The frame type of the images.
     :param templates: Fiducial templates to try to match.
-    :param cache: Whether to load and save cached results (this may take a while).
+    :param cache: Whether to load and save cached results(this may take a while).
     :returns: Transforms estimated from feature matching, with corresponding uncertainties.
     """
     # Define the filepath to look for / save / ignore the cache file
     cache_filepath = os.path.join(TEMP_DIRECTORY, "transforms", instrument + ".pkl")
     # Return a cached version if it exists and should be used
     if cache and os.path.isfile(cache_filepath):
-        return pickle.load(open(cache_filepath, "rb"))
+        with open(cache_filepath, "rb") as infile:
+            return pickle.load(infile)
 
     print(f"Generating new template transforms for {instrument}")
 
@@ -586,7 +667,7 @@ def match_templates(filenames: list[str], frame_type: str, instrument: str, temp
         """
         image = load_image(filename)
         # Extract a larger window than the default (500 vs 250) for the image to match the fiducial templates on.
-        fiducials = extract_fiducials(image, frame_type=frame_type, window_size=500, threshold=True)
+        fiducials = extract_fiducials(image, frame_type=frame_type, window_size=500, equalize=True)
 
         original_positions = []
         new_positions = []
@@ -644,7 +725,7 @@ def match_templates(filenames: list[str], frame_type: str, instrument: str, temp
 
     template_transforms = ImageTransforms(frame_type=frame_type)
     template_transforms.add_transforms(filenames, transforms)
-    template_transforms.add_uncertainties(uncertainties)
+    template_transforms.add_estimated_residuals(uncertainties)
 
     # Optionally save the result
     if cache:
@@ -679,12 +760,18 @@ def get_all_filenames_for_frame_type(frame_type: str, marked_fiducials: manual_p
 
 def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
                                           estimated_transforms: ImageTransforms) -> ImageTransforms:
+    """
+    Substitute poorly estimated transforms with manual ones (if they exist).
 
+    :param manual_transforms: Transforms from the manually picked fiducials.
+    :param estimated_transforms: Transforms from the estimated fiducials.
+    :returns: A merged transforms object with substituted poor estimated transforms.
+    """
     # Make sure that the manual and estimated transforms have the same frame type
     if manual_transforms.frame_type != estimated_transforms.frame_type:
         raise ValueError("Estimated and manual transforms have differing frame types")
 
-    # This is a temporary fix.
+    # This is a temporary fix (08/12/2020)
     # The attribute matching_uncertainties was renamed to estimation_uncertainties after some transforms were estimated.
     # Therefore, some of the pickled results still have the old name..
     # After a new estimation, this should be removed (2020-12-08)
@@ -693,7 +780,7 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     except AttributeError:
         estimated_transforms.estimation_uncertainties = estimated_transforms.matching_uncertainties  # type: ignore
 
-    # This is a temporary fix
+    # This is a temporary fix (08/12/2020)
     # The uncertainties were not normalized in x/y, so the resultant shape was (X, 4, 2) when it should have been (X, 4)
     # After another estimation, this should be removed (2020-12-08)
     if len(estimated_transforms.estimation_uncertainties.shape) == 3:  # type: ignore
@@ -710,7 +797,7 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     # They will respecively be NaNs if they are estimated/manual
     merged_transforms.manual_residuals = np.empty(shape=(len(estimated_transforms.keys()), 4))
     merged_transforms.manual_residuals[:] = np.nan
-    merged_transforms.estimation_uncertainties = merged_transforms.manual_residuals.copy()
+    merged_transforms.estimated_residuals = merged_transforms.manual_residuals.copy()
 
     # Generate a list of filenames that can replace the estimated if needed
     manually_picked_filenames: list[str] = manual_transforms.keys()
@@ -724,8 +811,8 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
                 filename), :]  # type: ignore
         else:
             merged_transforms[filename] = estimated_transforms[filename]
-            merged_transforms.estimation_uncertainties[i,
-                                                       :] = estimated_transforms.estimation_uncertainties[i, :]  # type: ignore
+            merged_transforms.estimated_residuals[i,
+                                                  :] = estimated_transforms.estimation_uncertainties[i, :]  # type: ignore
 
     # If no manual transforms were used, this should be reflected in the dataset
     if np.all(np.isnan(merged_transforms.manual_residuals)):
@@ -734,94 +821,67 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     return merged_transforms
 
 
-def estimate_transforms(manual_transforms: ImageTransforms, filenames: list[str], instrument: str) -> ImageTransforms:
+def compare_transforms(reference_transforms: ImageTransforms, compared_transforms: ImageTransforms) -> float:
     """
-    Estimate transforms on all images with the given frame type
+    Compare the RMS of the residuals between fiducials (in simulated positions) from two transform objects.
+
+    The reference transforms are assumed to not contain outliers.
+
+    :param reference_transforms: Transforms without outliers.
+    :param compared_transforms: Transforms with possible outliers (which will be excluded)
+    :returns: The RMS of the residuals.
     """
-    frame_type = manual_transforms.frame_type
-    print(f"Getting transforms for {instrument} ({frame_type})")
-
-    templates = get_fiducial_templates(manual_transforms, frame_type=frame_type, instrument=instrument)
-
-    estimated_transforms = match_templates(filenames=filenames, frame_type=frame_type,
-                                           templates=templates, instrument=instrument)
-
-    return estimated_transforms
-
-
-def manually_complement_matching(manual_transforms: ImageTransforms, estimated_transforms: ImageTransforms):
-    """
-    Find poor automatic matches and complement them manually in the GUI.
-
-    :param manual_transforms: The manual transforms that may / may not replace the estimated ones.
-    :param estimated_transforms: The estimated transforms from which to search for outliers and manual replacements.
-    """
-    assert estimated_transforms.frame_type == manual_transforms.frame_type, "Estimated and manual frame types differ."
-
-    estimated_outliers = estimated_transforms.get_outlier_filenames()
-
-    unfixed_outliers = estimated_outliers[~np.isin(estimated_outliers, manual_transforms.keys())]
-
-    if len(unfixed_outliers) == 0:
-        return
-
-    manual_picking.gui(instrument_type=estimated_transforms.frame_type, filenames=unfixed_outliers)
-
-
-def compare_transforms(reference_transforms: ImageTransforms, compared_transforms: ImageTransforms):
-
     # Get arbitrary coordinates to compare the reference vs. compared transforms with
     fiducial_positions = CONSTANTS.wild_fiducial_locations if "wild" in compared_transforms.frame_type \
         else CONSTANTS.zeiss_fiducial_locations
-    start_coords = np.array([coord for coord in fiducial_positions.values()])[:, ::-1]
+    # Convert the coordinates to an array and invert the second axis to have x/y order instead of y/x
+    start_coords = np.array(list(fiducial_positions.values()))[:, ::-1]
 
-    filenames_with_a_reference = reference_transforms.keys()
+    compared_filenames = np.array(compared_transforms.keys())
+    # Find the filenames that should be compared
+    valid_filenames = compared_filenames[~np.isin(compared_filenames, np.unique(np.r_[
+        compared_transforms.get_outlier_filenames(),  # They are estimated outliers.
+        compared_filenames[~np.isin(compared_filenames, reference_transforms.keys())]  # They exist in both transforms.
+    ]))]
 
-    uncertainties = []
-    rmses = []
-    for filename in compared_transforms:
-        if filename not in filenames_with_a_reference:
-            continue
+    rmses: list[float] = []
+    for filename in valid_filenames:
         reference_points = reference_transforms[filename](start_coords)
         compared_points = compared_transforms[filename](start_coords)
 
-        rms = np.sqrt(np.mean(np.square(np.linalg.norm(compared_points - reference_points, axis=1))))
+        rmse = np.sqrt(np.mean(np.square(np.linalg.norm(compared_points - reference_points, axis=1))))
+        rmses.append(rmse)
 
-        estimated_residuals = compared_transforms.estimation_uncertainties[
-            compared_transforms.keys().index(filename)]  # type: ignore
-        uncertainties.append(np.linalg.norm(estimated_residuals[~np.isnan(estimated_residuals)]))
-
-        rmses.append(rms)
-
-    return np.mean(rms)
-
-    return
-    plt.scatter(uncertainties, rmses)
-    ylim = plt.gca().get_ylim()
-    xlim = plt.gca().get_xlim()
-    percentile = 75
-    plt.vlines(x=np.percentile(uncertainties, 85), ymin=ylim[0], ymax=ylim[1])
-    plt.hlines(y=np.percentile(rmses, 85), xmin=xlim[0], xmax=xlim[1])
-
-    plt.show()
+    return np.mean(rmses)
 
 
-def get_all_frame_type_transforms(complement: bool = False, verbose: bool = True):
+def get_all_instrument_transforms(complement: bool = False, verbose: bool = True) -> ImageTransforms:
+    """
+    Loop through each of the instruments and fetch/estimate image transforms.
+
+    :param complement: Look for outliers in the estimation and start the marking GUI to complement them.
+    :param verbose: Print statistics about the transforms.
+    :returns: A transforms object of each estimated/manually substituted image transform.
+    """
+    # Load the manually marked fiducials.
     marked_fiducials = manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"])
+    # Find which instruments were marked and what frame type they correspond to.
     instruments = marked_fiducials.get_instrument_frame_type_relation()
 
+    # Find the corresponding filenames for each instrument.
     instrument_filenames = {
         instrument: image_meta.get_filenames_for_instrument(
             instrument
         ) for instrument in instruments
     }
+    # Calculate manual transforms from the marked fiducials.
     manual_transforms = {
-        instrument: make_reference_transforms(
+        instrument: calculate_manual_transforms(
             marked_fiducials.subset(instrument_filenames[instrument]),
             frame_type=instruments[instrument]
         ) for instrument in instruments
     }
-
+    # Extract fiducial templates from each instrument to use with the feature matching.
     fiducial_templates = {
         instrument: get_fiducial_templates(
             transforms=manual_transforms[instrument],
@@ -841,18 +901,10 @@ def get_all_frame_type_transforms(complement: bool = False, verbose: bool = True
         ) for instrument in instruments
     }
 
-    # Below may be temporary due to an error that probably has been fixed
-    fixed = 0
+    # TEMPORARY (11/12/2020)
+    # Only needed for the currently cached transforms.
     for instrument in instruments:
-        for filename in estimated_transforms[instrument].keys():
-            if np.any(np.isnan(estimated_transforms[instrument][filename].params)):
-                fixed += 1
-                estimated_transforms[instrument][filename] = skimage.transform.EuclideanTransform(rotation=0)
-                estimated_transforms[instrument].estimation_uncertainties[
-                    estimated_transforms[instrument].keys().index(filename)
-                ] = [1e3, 1e3, 1e3, 1e3]
-
-    print(f"FIXED {fixed} transforms")
+        estimated_transforms[instrument].estimated_residuals = estimated_transforms[instrument].estimation_uncertainties
 
     merged_transforms = {
         instrument: merge_manual_and_estimated_transforms(
@@ -870,7 +922,7 @@ def get_all_frame_type_transforms(complement: bool = False, verbose: bool = True
         print(f"\nMean manual-to-estimated error: {np.mean(rmses):.2f} px\n")
 
         for key in merged_transforms:
-            print(key, "\t", merged_transforms[key])
+            print(key, "\t\t", merged_transforms[key])
 
         print("\nLooking for outliers")
         total_outliers = 0
@@ -896,5 +948,81 @@ def get_all_frame_type_transforms(complement: bool = False, verbose: bool = True
     return ImageTransforms.from_multiple(list(merged_transforms.values()))
 
 
+def save_fiducial_locations(image_transforms: ImageTransforms, instrument: str) -> str:
+    """
+    Save the estimated/marked fiducial locations to a CSV.
+
+    :param image_transforms: An unsorted collection of image transforms.
+    :param instrument: The instrument to save the fiducial locations from.
+    :returns: The path to the CSV with the name template: "fiducials_{instrument}.csv"
+    """
+    # Get the filenames of the images that should be processed.
+    filenames = image_meta.get_filenames_for_instrument(instrument)
+    # Find the median location of the fiducials
+    median_fiducial_locations = get_median_fiducial_locations(
+        manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"]).subset(filenames)
+    )
+    # Create a header list of the filename and x/y coordinates in px and mm for all corners.
+    # The header should have an item length of 9
+    data_header: list[str] = ["filename"] + \
+        list(np.array([[f"{corner}_x", f"{corner}_y"] for corner in CORNERS]).flatten()) + \
+        list(np.array([[f"{corner}_x_mm", f"{corner}_y_mm"] for corner in CORNERS]).flatten())
+
+    # Find the center of the image using the mean of the top and bottom fiducials
+    # Left and right on the Zeiss has the same approximate Y-coordinate as top, hence why only top and bottom are used.
+    top_and_bottom = [CORNERS.index("top"), CORNERS.index("bottom")]
+    center = np.mean(median_fiducial_locations[top_and_bottom], axis=0)
+
+    # Calculate the locations in mm from the centre of the image using the scanning resolution as a converter
+    fiducial_locations_mm = (median_fiducial_locations - center) * CONSTANTS.scanning_resolution * 1e3
+    # Switch the axis on the Y-coordinate so the top fiducial has positive millimeters and the bottom has negative.
+    fiducial_locations_mm[:, 0] *= -1
+
+    # Create a list to warn about possible missing filenames
+    missing_filenames: list[str] = []
+    # Create a list of lists to iteratively fill
+    data_rows: list[list[Union[str, float]]] = []
+    for filename in filenames:
+        row: list[Union[str, float]] = [filename]
+        if filename not in image_transforms:
+            missing_filenames.append(filename)
+            continue
+        # Loop over all corners and mark their transformed coordinates. TODO: Look up if it should be the inverse.
+        for corner_coord in median_fiducial_locations:
+            x_coord, y_coord = image_transforms[filename](corner_coord[::-1])[0]
+            row += [x_coord, y_coord]
+
+        row += list(fiducial_locations_mm[:, ::-1].flatten())
+        data_rows.append(row)
+
+    if len(missing_filenames) > 0:
+        warnings.warn(f"{len(missing_filenames)} missing when exporting fiducial locations" +
+                      ", ".join(missing_filenames))
+
+    # Write the CSV.
+    output_filepath = os.path.join(CACHE_FILES["fiducial_location_dir"], f"fiducials_{instrument}.csv")
+    os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
+    with open(output_filepath, "w") as outfile:
+        writer = csv.writer(outfile)
+        writer.writerow(data_header)
+        writer.writerows(data_rows)
+
+    return output_filepath
+
+
+def save_all_fiducial_locations(image_transforms: ImageTransforms) -> dict[str, str]:
+    """Write CSVs for all instruments in the image_transforms collection."""
+    marked_fiducials = manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"])
+    # Find which instruments were marked and what frame type they correspond to.
+    instruments = marked_fiducials.get_instrument_frame_type_relation()
+
+    # Save the fiducial locations for each instrument
+    filepaths = {instrument: save_fiducial_locations(image_transforms, instrument) for instrument in instruments}
+
+    return filepaths
+
+
 if __name__ == "__main__":
-    print(get_all_frame_type_transforms(complement=True, verbose=True))
+    transforms = get_all_instrument_transforms(complement=False, verbose=False)
+
+    save_all_fiducial_locations(transforms)

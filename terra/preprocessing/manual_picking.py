@@ -187,7 +187,7 @@ class MarkedFiducials:
         """Add a fiducial mark to the collection."""
         self.fiducial_marks.append(fiducial_mark)
 
-    def get_fiducial_marks(self, filename: str) -> dict[str, Optional[FiducialMark]]:
+    def get_fiducial_marks(self, filename: str) -> dict[str, FiducialMark]:
         """
         Get the fiducial marks from a specific image.
 
@@ -198,8 +198,15 @@ class MarkedFiducials:
         fiducial_marks_for_file = [mark for mark in self.fiducial_marks if mark.filename == filename]
 
         # Make a dictionary of fiducial marks which are None by default
-        marks: dict[str, Optional[FiducialMark]] = {corner: None for corner in FIDUCIAL_LOCATIONS}
-
+        marks: dict[str, FiducialMark] = {
+            corner: FiducialMark(
+                filename=filename,
+                corner=corner,
+                x_position=None,
+                y_position=None,
+                frame_type="default"
+            ) for corner in ["left", "right", "top", "bottom"]
+        }
         # Add the fiducial marks that exist (the nonexistent will still be None)
         for fiducial_mark in fiducial_marks_for_file:
             marks[fiducial_mark.corner] = fiducial_mark

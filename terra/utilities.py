@@ -5,8 +5,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Optional
 
 import statictypes
 
@@ -97,3 +98,28 @@ def notify(message: str) -> None:
     Send a notification to the current user.
     """
     subprocess.run(["notify-send", message], check=True)
+
+
+class Timer:
+    """A simple timer to measure the running time of a script."""
+
+    def __init__(self):
+        """Start the timer as soon as it is instantiated."""
+        self.start_time = time.time()
+        self.stop_time: Optional[float] = None
+        self.duration: Optional[float] = None
+
+    def stop(self, verbose: bool = False) -> float:
+        """
+        Stop the timer.
+
+        :param verbose: Optionally print the duration with three decimals.
+        """
+        self.stop_time = time.time()
+        self.duration = self.stop_time - self.start_time
+
+        if verbose:
+            duration = self.stop_time - self.start_time
+            print(f"Time: {duration:.3f} s")
+
+        return self.duration
