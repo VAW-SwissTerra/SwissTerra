@@ -425,6 +425,10 @@ def gui(instrument_type: str, filenames: Optional[np.ndarray] = None):
                 window[corner].RelocateFigure(
                     figure=marked_fiducial_circles[corner], y=graph_y_position + POINT_RADIUS * 2, x=graph_x_position + POINT_RADIUS * 2)
 
+            # It sometimes inexplicably changes to default in spite of the instrument_type being known
+            if frame_type == "default" and len(instrument_type) > 5:
+                frame_type = instrument_type
+
             # Update the selected type text.
             window["selected-type"](f"Selected type: {frame_type}")
 

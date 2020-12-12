@@ -358,7 +358,7 @@ def calculate_manual_transforms(marked_fiducials: manual_picking.MarkedFiducials
         residual *= np.count_nonzero(missing_values) + 1
 
         # Toss the results if they weren't good enough  # TODO: Remove the 4 multiplier for errors
-        if np.mean(residual) > CONSTANTS.transform_outlier_threshold * 4:
+        if np.mean(residual) > CONSTANTS.transform_outlier_threshold * 10:
             continue
         # Otherwise, save them
         residuals.append(residual)
@@ -568,16 +568,16 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
         fiducial = image[fiducial_bounds.as_slice()]
         # Optionally stretch the lighness to between the 1st and 99th percentile of the lightness
         if equalize:
-            min_value = np.percentile(fiducial.flatten(), 20)
-            max_value = np.percentile(fiducial.flatten(), 90)
-            fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
-                               a_min=0, a_max=255).astype(fiducial.dtype)
-            # fiducial = cv2.threshold(
-            #    src=np.clip(fiducial - min_value, a_min=0, a_max=255),
-            #    thresh=40,
-            #    maxval=255,
-            #    type=cv2.THRESH_BINARY
-            # )[1].astype(fiducial.dtype)
+            min_value = np.percentile(fiducial.flatten(), 10)
+            #max_value = np.percentile(fiducial.flatten(), 90)
+            # fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
+            #                   a_min=0, a_max=255).astype(fiducial.dtype)
+            fiducial = cv2.threshold(
+                src=np.clip(fiducial - min_value, a_min=0, a_max=255),
+                thresh=40,
+                maxval=255,
+                type=cv2.THRESH_BINARY
+            )[1].astype(fiducial.dtype)
 
         # Make a new fiducial instance and add it to the output dictionary
         fiducials[corner] = Fiducial(
@@ -771,22 +771,6 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     if manual_transforms.frame_type != estimated_transforms.frame_type:
         raise ValueError("Estimated and manual transforms have differing frame types")
 
-    # This is a temporary fix (08/12/2020)
-    # The attribute matching_uncertainties was renamed to estimation_uncertainties after some transforms were estimated.
-    # Therefore, some of the pickled results still have the old name..
-    # After a new estimation, this should be removed (2020-12-08)
-    try:
-        getattr(estimated_transforms, "estimation_uncertainties")
-    except AttributeError:
-        estimated_transforms.estimation_uncertainties = estimated_transforms.matching_uncertainties  # type: ignore
-
-    # This is a temporary fix (08/12/2020)
-    # The uncertainties were not normalized in x/y, so the resultant shape was (X, 4, 2) when it should have been (X, 4)
-    # After another estimation, this should be removed (2020-12-08)
-    if len(estimated_transforms.estimation_uncertainties.shape) == 3:  # type: ignore
-        estimated_transforms.estimation_uncertainties = np.linalg.norm(
-            estimated_transforms.estimation_uncertainties, axis=2)
-
     # Get the filenames that were estimated poorly
     estimated_outliers = estimated_transforms.get_outlier_filenames()
 
@@ -807,12 +791,11 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
         # Check if the manual transform should be added
         if filename in estimated_outliers and filename in manually_picked_filenames:
             merged_transforms[filename] = manual_transforms[filename]
-            merged_transforms.manual_residuals[i, :] = manual_transforms.manual_residuals[manually_picked_filenames.index(
-                filename), :]  # type: ignore
+            merged_transforms.manual_residuals[i, :] = manual_transforms.manual_residuals[
+                manually_picked_filenames.index(filename), :]  # type: ignore
         else:
             merged_transforms[filename] = estimated_transforms[filename]
-            merged_transforms.estimated_residuals[i,
-                                                  :] = estimated_transforms.estimation_uncertainties[i, :]  # type: ignore
+            merged_transforms.estimated_residuals[i, :] = estimated_transforms.estimated_residuals[i, :]  # type: ignore
 
     # If no manual transforms were used, this should be reflected in the dataset
     if np.all(np.isnan(merged_transforms.manual_residuals)):
@@ -903,8 +886,8 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
 
     # TEMPORARY (11/12/2020)
     # Only needed for the currently cached transforms.
-    for instrument in instruments:
-        estimated_transforms[instrument].estimated_residuals = estimated_transforms[instrument].estimation_uncertainties
+    # for instrument in instruments:
+    #    estimated_transforms[instrument].estimated_residuals = estimated_transforms[instrument].estimation_uncertainties
 
     merged_transforms = {
         instrument: merge_manual_and_estimated_transforms(
