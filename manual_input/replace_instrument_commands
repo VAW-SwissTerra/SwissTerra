@@ -1,0 +1,7 @@
+#!/bin/bash
+initial_frame_type="$1"
+destination_frame_type="$2"
+
+cp manual_input/marked_fiducials.csv manual_input/marked_fiducials_old.csv
+
+cat manual_input/marked_fiducials_old.csv | eval "sed $(cat manual_input/instruments | while read filename; do echo "-e /$filename/s/$initial_frame_type/$destination_frame_type/"; done | tr "\n" " ")" > manual_input/marked_fiducials_new.csv
