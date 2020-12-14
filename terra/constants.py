@@ -29,6 +29,7 @@ class Constants(ConstantType):  # pylint: disable=R0903
     wild_fiducial_locations = WILD_FIDUCIAL_LOCATIONS
     zeiss_fiducial_locations = ZEISS_FIDUCIAL_LOCATIONS
     transform_outlier_threshold: float = 10
+    tripod_height: float = 1.2
 
 
 CONSTANTS = Constants()

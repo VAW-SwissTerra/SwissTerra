@@ -128,57 +128,6 @@ def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
     return output_meta
 
 
-def match_asift(filepath1: str, filepath2: str, verbose: bool = True) -> pd.DataFrame:
-    """
-    Find matches between two images using the ASIFT (Affine-Scale Invariant Feature transform).
-
-    param: filepath1: The first image filepath to match.
-    param: filepath2: The second image filepath to match.
-    param: verbose: Whether to print ASIFT outputs.
-
-    return: matches: The computed matches between the images.
-    """
-    warnings.warn("ASIFT is deprecated", DeprecationWarning)
-    image1 = cv2.imread(filepath1, cv2.IMREAD_GRAYSCALE)
-    image2 = cv2.imread(filepath2, cv2.IMREAD_GRAYSCALE)
-
-    # Trim the image to remove the frame and reduce it so ASIFT can use it
-    side_trim = 500  # To remove the frame
-    new_width = 2500  # To downscale the image so ASIFT can work
-    os.makedirs(CACHE_FILES["asift_temp_dir"], exist_ok=True)
-
-    # Go through each image and crop, resize, then save it as a PNG (needed for ASIFT)
-    for i, image in enumerate([image1, image2]):
-        trimmed_image = image[side_trim:-side_trim, side_trim:-side_trim]
-
-        new_height = int(trimmed_image.shape[0] * (new_width / trimmed_image.shape[1]))
-        resized_image = cv2.resize(trimmed_image, (new_width, new_height))
-        assert resized_image.shape[1] == new_width  # Check that everything went right
-
-        cv2.imwrite(os.path.join(CACHE_FILES["asift_temp_dir"], f"image_{i + 1}.png"), resized_image)
-
-    # Files that ASIFT needs/produces (first/second image input, horizontal/vertical match plot, matches, and keypoints)
-    asift_files = ["image_1.png", "image_2.png", "matches_vert.png",
-                   "matches_horiz.png", "matches.txt", "keys1.txt", "keys2.txt"]
-    # Put the commands in order (asift INPUTS+OUTPUTS 0). The 0 means don't resize to 800x600
-    asift_commands = ["asift"] + [os.path.join(CACHE_FILES["asift_temp_dir"], filename)
-                                  for filename in asift_files] + ["0"]
-    # Run ASIFT
-    with no_stdout(disable=verbose):
-        subprocess.run(asift_commands, check=True)
-
-    # Load the matches produced by ASIFT
-    matches = pd.read_csv(os.path.join(CACHE_FILES["asift_temp_dir"], "matches.txt"), delimiter="  ",
-                          skiprows=1, engine="python", names=["img1_x", "img1_y", "img2_x", "img2_y"])
-
-    # Convert the match coordinates from trimmed/scaled to the original size
-    for label, image in zip(["img1", "img2"], [image1, image2]):
-        matches[[f"{label}_x", f"{label}_y"]] *= (image.shape[1] - side_trim * 2) / new_width
-    matches += side_trim
-
-    return matches
-
-
 def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_value=-9999) -> Optional[Dict[str, str]]:
     """
     Align two DEMs and return the ICP result.

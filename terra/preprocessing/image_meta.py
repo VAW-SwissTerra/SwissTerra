@@ -217,4 +217,4 @@ def get_filenames_for_instrument(instrument: str) -> np.ndarray:
 
 
 if __name__ == "__main__":
-    get_matching_candidates()
+    meta = read_metadata()

@@ -22,12 +22,10 @@ CACHE_FILES = {
     "fiducial_template_dir": os.path.join(TEMP_DIRECTORY, "templates"),
     "image_frames_dir": os.path.join(TEMP_DIRECTORY, "templates/image_frames/"),
     "fiducial_location_dir": os.path.join(TEMP_DIRECTORY, "locations"),
+    "merged_transforms": os.path.join(TEMP_DIRECTORY, "transforms/merged.pkl")
 }
 # Define the order in which fiducial corners are considered.
 CORNERS = ["left", "right", "top", "bottom"]
-
-
-# TODO: Maybe replace hardcoded fiducial locations with ones estimated from the manual picking?
 
 
 class ImageTransforms:
@@ -839,14 +837,21 @@ def compare_transforms(reference_transforms: ImageTransforms, compared_transform
     return np.mean(rmses)
 
 
-def get_all_instrument_transforms(complement: bool = False, verbose: bool = True) -> ImageTransforms:
+def get_all_instrument_transforms(complement: bool = False, verbose: bool = True,
+                                  cache: bool = True) -> ImageTransforms:
     """
     Loop through each of the instruments and fetch/estimate image transforms.
 
     :param complement: Look for outliers in the estimation and start the marking GUI to complement them.
     :param verbose: Print statistics about the transforms.
+    :param cache: Whether to cache the final final output (it takes a while to generate).
     :returns: A transforms object of each estimated/manually substituted image transform.
     """
+    if cache and os.path.isfile(CACHE_FILES["merged_transforms"]):
+        if verbose:
+            print("Loading cached transforms")
+        with open(CACHE_FILES["merged_transforms"], "rb") as infile:
+            return pickle.load(infile)
     # Load the manually marked fiducials.
     marked_fiducials = manual_picking.MarkedFiducials.read_csv(files.INPUT_FILES["marked_fiducials"])
     # Find which instruments were marked and what frame type they correspond to.
@@ -884,11 +889,6 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
             cache=True
         ) for instrument in instruments
     }
-
-    # TEMPORARY (11/12/2020)
-    # Only needed for the currently cached transforms.
-    # for instrument in instruments:
-    #    estimated_transforms[instrument].estimated_residuals = estimated_transforms[instrument].estimation_uncertainties
 
     merged_transforms = {
         instrument: merge_manual_and_estimated_transforms(
@@ -929,7 +929,12 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
             manual_picking.gui(instrument_type=instruments[instrument],
                                filenames=outliers)
 
-    return ImageTransforms.from_multiple(list(merged_transforms.values()))
+    all_transforms = ImageTransforms.from_multiple(list(merged_transforms.values()))
+
+    if cache:
+        with open(CACHE_FILES["merged_transforms"], "wb") as outfile:
+            pickle.dump(all_transforms, outfile)
+    return all_transforms
 
 
 def save_fiducial_locations(image_transforms: ImageTransforms, instrument: str) -> str:

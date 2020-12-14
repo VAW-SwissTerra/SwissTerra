@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from terra import files, preprocessing
 from terra.constants import CONSTANTS
-from terra.preprocessing import masks
+from terra.preprocessing import fiducials, georeferencing, masks
 from terra.processing import inputs, processing_tools
 from terra.utilities import no_stdout
 
@@ -174,6 +174,8 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
     with no_stdout():
         chunk = doc.addChunk()
 
+    chunk.meta["dataset"] = doc.meta["dataset"]
+
     if chunk_label is not None:
         chunk.label = chunk_label
 
@@ -184,6 +186,8 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
     filepaths = [os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in filenames]
 
     image_meta = inputs.get_dataset_metadata(doc.meta["dataset"])
+    #all_image_meta = georeferencing.generate_corrected_metadata()
+    #image_meta = all_image_meta[all_image_meta["Image file"].isin(filenames)]
 
     with no_stdout():
 
@@ -303,7 +307,10 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
     param: chunk: The active chunk.
     param: sensor: The sensor to assign the fiducials to.
     """
-    matcher = preprocessing.fiducials.FrameMatcher(verbose=False)
+    fiducial_marks = pd.read_csv(
+        os.path.join(fiducials.CACHE_FILES["fiducial_location_dir"], f"fiducials_{chunk.meta['dataset']}.csv"),
+        index_col=0)
+
     new_fiducials = {}
     for corner in ["top", "right", "bottom", "left"]:
         fiducial = chunk.addMarker()
@@ -312,17 +319,22 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
 
         fiducial.sensor = sensor
 
+        # Take the x/y mm coordinate of the first matching camera
+        x_mm, y_mm = fiducial_marks.loc[chunk.cameras[0].label + ".tif", [f"{corner}_x_mm", f"{corner}_y_mm"]]
+        fiducial.reference.location = ms.Vector([x_mm, y_mm, 0])
+
         new_fiducials[corner] = fiducial
 
-    fiducial_projections = matcher.calculate_fiducial_projections()
-
     for camera in chunk.cameras:
-        projections = fiducial_projections[camera.label + ".tif"]
+        projection_row = fiducial_marks.loc[camera.label + ".tif"]
 
         for corner, fiducial in new_fiducials.items():
-            fid_projection = projections._asdict()[corner]
             fiducial.projections[camera] = ms.Marker.Projection(
-                ms.Vector([fid_projection.x, fid_projection.y]), True)
+                ms.Vector([
+                    projection_row[f"{corner}_x"],
+                    projection_row[f"{corner}_y"]
+                ]),
+                True)
 
 
 @statictypes.convert
@@ -381,7 +393,7 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
             camera.enabled = True
 
 
-@statictypes.convert
+@ statictypes.convert
 def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
     """
     Build DEMs using PDAL and GDAL.
@@ -427,7 +439,7 @@ def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
             chunk.importRaster(path=filepaths[i][1], crs=chunk.crs, raster_type=ms.DataSource.ElevationData)
 
 
-@statictypes.convert
+@ statictypes.convert
 def build_orthomosaics(chunks: List[ms.Chunk], resolution: float) -> None:
     """
     Build orthomosaics for each chunk.
@@ -544,12 +556,14 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
             return merged_chunk
 
     aligned_chunks: List[ms.Chunk] = []
-    print("Aligning stations")
+    progress_bar = tqdm(total=np.unique(image_meta["Base number"]).shape[0])
     # Loop through all stations (stereo-pairs) and align them if they don't already exist
     for station_number, station_meta in tqdm(image_meta.groupby("Base number")):
+        progress_bar.desc = f"Aligning station {station_number}"
         # Check if a "stereo-pair" only has the right or left position (so it's not a stereo-pair)
         if station_meta["Position"].unique().shape[0] < 2:
             print(f"Station {station_number} only has position {station_meta['Position'].iloc[0]}. Skipping.")
+            progress_bar.update()
             continue
 
         chunk_label = f"station_{station_number}"
@@ -572,6 +586,8 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
         if aligned:
             aligned_chunks.append(chunk)
 
+        progress_bar.update()
+
     print("Merging chunks")
     merged_chunk = merge_chunks(doc, aligned_chunks, remove_old=True, optimize=True)
     merged_chunk.meta["dataset"] = dataset
@@ -579,7 +595,7 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
     return merged_chunk
 
 
-@statictypes.enforce
+@ statictypes.enforce
 def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.float64:
     """
     Get the reprojection error between a marker's projection and a camera's reprojected position.
@@ -603,7 +619,7 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
     return diff
 
 
-@statictypes.enforce
+@ statictypes.enforce
 def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Marker, np.float64]:
     """
     Calculate the mean reprojection error for a marker, checked on all pinned projections.
@@ -625,40 +641,7 @@ def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Mark
     return mean_errors
 
 
-def get_asift_markers(chunk):
-    """Get markers from ASIFT matching."""
-    warnings.warn("ASIFT is deprecated", DeprecationWarning)
-    all_candidates = preprocessing.image_meta.get_matching_candidates()
-
-    cameras = {camera.label + ".tif": camera for camera in chunk.cameras}
-    matching_candidates = [candidates for candidates in all_candidates if candidates[0]
-                           in cameras and candidates[1] in cameras]
-
-    for filename1, filename2 in tqdm(matching_candidates):
-        filepath1 = os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename1)
-        filepath2 = os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename2)
-
-        matches = processing_tools.match_asift(filepath1, filepath2, verbose=False)
-
-        for i, match in matches.iterrows():
-            marker = chunk.addMarker()
-
-            for tag, filename in zip(["img1", "img2"], [filename1, filename2]):
-                marker.projections[cameras[filename]] = ms.Marker.Projection(
-                    ms.Vector(match[[f"{tag}_x", f"{tag}_y"]].values), True)
-
-            errors = []
-            for filename in [filename1, filename2]:
-                errors.append(get_marker_reprojection_error(cameras[filename], marker))
-
-            if np.mean(errors) == np.NaN:
-                chunk.remove(marker)
-                continue
-
-            marker.label = f"asift_{filename1}_{filename2}_{i}"
-
-
-@statictypes.enforce
+@ statictypes.enforce
 def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
     """
     Get a list of stereo-pair group names.
@@ -678,7 +661,7 @@ def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
     return pairs
 
 
-@statictypes.enforce
+@ statictypes.enforce
 def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
     """
     List all stereo-pairs that have not yet finished a step.
@@ -765,7 +748,8 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     return dem_filepaths
 
 
-def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 13.0, tie_group_radius: float = 30.0, marker_pixel_accuracy=4.0):
+def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 13.0,
+                         tie_group_radius: float = 30.0, marker_pixel_accuracy=4.0):
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.
 
@@ -885,7 +869,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             # Assume that the projection is valid if it didn't fill any of the above criterai
             return True
 
-        @statictypes.enforce
+        @ statictypes.enforce
         def find_good_cameras(pair: str, positions: pd.DataFrame) -> List[ms.Camera]:
             """
             Find a camera that can "see" all the given positions.

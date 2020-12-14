@@ -69,12 +69,13 @@ def parse_args():
                                       help="clear the cache and start from the beginning")
     preprocessing_parser.set_defaults(func=preprocessing_commands)
 
-    datasets = {dataset: files.read_dataset_meta(dataset) for dataset in files.DATASETS}
-    choices = {dataset: "Process the {name} dataset".format(name=datasets[dataset]["name"]) for dataset in datasets}
+    # Processing
+    datasets = processing.inputs.get_dataset_names()
+    choices = {dataset: f"Process the {dataset} dataset" for dataset in datasets}
     processing_parser = commands.add_parser("processing", formatter_class=argparse.RawTextHelpFormatter,
                                             help="Main data processing.", description="Main data processing")
-    processing_parser.add_argument("dataset", help=generate_help_text(choices),
-                                   metavar="dataset", choices=choices.keys())
+    processing_parser.add_argument("dataset", help="The dataset to process (type anything to see valid options)",
+                                   metavar="dataset", choices=datasets)
 
     choices = {
         "run": "Run the main processing pipeline for the dataset",
@@ -177,10 +178,12 @@ def preprocessing_commands(args):
 
 def processing_commands(args):
     """Run the main processing subcommands."""
-    if args.action == "run":
-        processing.main.process_dataset(args.dataset)
-    if args.action == "rerun":
-        processing.main.process_dataset(args.dataset, redo=True)
+    if args.action in ["run", "rerun"]:
+        if args.dataset == "full":
+            for dataset in processing.inputs.get_dataset_names():
+                print(f"Processing {dataset}")
+                processing.main.process_dataset(dataset, redo=args.action == "rerun")
+        processing.main.process_dataset(args.dataset, redo=args.action == "rerun")
     elif args.action == "check-inputs":
         processing.inputs.check_inputs(args.dataset)
     elif args.action == "generate-inputs":

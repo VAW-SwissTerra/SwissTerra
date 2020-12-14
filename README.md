@@ -27,11 +27,6 @@
 	```bash
 	pip install --editable .
 	```
-	or
-	```bash
-	echo "alias terra='$(which python) $(pwd)/terra/__main__.py'" >> ~/.bashrc
-	source ~/.bashrc
-	```
 
 	Make sure that the correct conda environment is activated before running this step.
 

@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import warnings
 
 import Metashape as ms
 import statictypes
@@ -21,13 +22,15 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     param: redo: Whether to redo steps that already exist.
 
     """
-    inputs.export_camera_orientation_csv(dataset)
+    dataset = "Wild109"
+    warnings.warn("Hardcoded instrument Wild109")
 
     # Load the metashape document or create a new one
     if not redo and metashape_tools.is_document(dataset):
         doc = metashape_tools.load_document(dataset)
         print(f"Loaded Metashape document for {dataset}")
     else:
+        inputs.export_camera_orientation_csv(dataset)
         doc = metashape_tools.new_document(dataset)
         shutil.rmtree(inputs.CACHE_FILES[f"{dataset}_temp_dir"])
         os.makedirs(inputs.CACHE_FILES[f"{dataset}_temp_dir"])
@@ -43,7 +46,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
     # TODO: Remove this when ICP seems to be working.
     # Import reference markers and fit the camera model
-    if True:
+    if False:
         for marker in chunk.markers:
             if "Tie " in marker.label:
                 break
@@ -52,7 +55,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
             metashape_tools.optimize_cameras(chunk)
 
     # Remove the reference markers but keep the camera model fixed onward.
-    if True:
+    if False:
         for marker in chunk.markers:
             if "Tie " in marker.label:
                 chunk.remove(marker)

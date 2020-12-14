@@ -4,16 +4,30 @@ from collections import namedtuple
 import numpy as np
 import pandas as pd
 
-from terra import files, preprocessing
-
-DATASETS = files.DATASETS + ["full"]
-
+from terra import files
+from terra.preprocessing import fiducials, georeferencing, image_meta, masks
 
 CACHE_FILES = {
 }
 
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "processing")
+
+
+def get_dataset_names() -> list[str]:
+    image_metadata = image_meta.read_metadata()
+    image_metadata["year"] = image_metadata["date"].apply(lambda date: date.year)
+    unique_instruments = np.unique(image_metadata["Instrument"])
+
+    datasets: list[str] = []
+    for instrument in unique_instruments:
+        unique_years = np.unique(image_metadata.loc[image_metadata["Instrument"] == instrument, "year"])
+        datasets += [f"{instrument}_{year}" for year in unique_years]
+
+    return datasets
+
+
+DATASETS = get_dataset_names() + ["full"]
 
 for _dataset in DATASETS:
     CACHE_FILES[f"{_dataset}_dir"] = os.path.join(TEMP_DIRECTORY, _dataset)
@@ -32,9 +46,18 @@ def get_dataset_filenames(dataset: str) -> np.ndarray:
 
     return: dataset_filenames: The filenames corresponding to the dataset.
     """
+    instrument = dataset.split("_")[0]
+    year = int(dataset.split("_")[1])
+
+    all_metadata = image_meta.read_metadata()
+    all_metadata["year"] = all_metadata["date"].apply(lambda date: date.year)
+    dataset_meta = all_metadata[(all_metadata["Instrument"] == instrument) & (all_metadata["year"] == year)]
+    filenames = dataset_meta["Image file"].values
+
+    return filenames
     dataset_meta = files.read_dataset_meta(dataset)
 
-    dataset_filenames = preprocessing.image_meta.get_cameras_from_bounds(
+    dataset_filenames = image_meta.get_cameras_from_bounds(
         left=float(dataset_meta["bounds"]["left"]),
         right=float(dataset_meta["bounds"]["right"]),
         top=float(dataset_meta["bounds"]["top"]),
@@ -52,7 +75,7 @@ def get_dataset_metadata(dataset: str) -> pd.DataFrame:
 
     return: all_data / subset_data: Metadata for each image.
     """
-    all_data = preprocessing.image_meta.read_metadata()
+    all_data = image_meta.read_metadata()
 
     if dataset == "full":
         return all_data
@@ -63,7 +86,10 @@ def get_dataset_metadata(dataset: str) -> pd.DataFrame:
 
 
 def export_camera_orientation_csv(dataset: str):
-    image_metadata = get_dataset_metadata(dataset)
+    #image_metadata = get_dataset_metadata(dataset)
+    filenames = get_dataset_filenames(dataset)
+    all_image_meta = georeferencing.generate_corrected_metadata()
+    image_metadata = all_image_meta[all_image_meta["Image file"].isin(filenames)]
 
     # image_metadata["label"] = image_metadata["Image file"].str.replace(".tif", "")
     image_metadata.rename(columns={"Image file": "label"}, inplace=True)
@@ -85,16 +111,14 @@ def check_inputs(dataset: str) -> None:
     image_filenames = get_dataset_filenames(dataset)
     image_filepaths = [os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in image_filenames]
 
-    raise NotImplementedError("Frame matcher doesn't work anymore")
-    frame_matcher = preprocessing.fiducials.FrameMatcher(verbose=False)
-    transforms = frame_matcher.load_transforms("merged_transforms.pkl")
+    transforms = fiducials.get_all_instrument_transforms()
 
     try:
         image_metadata = get_dataset_metadata(dataset)
         meta_exists = True
     except FileNotFoundError:
         meta_exists = False
-        missing_inputs.append(MissingInput(preprocessing.image_meta.CACHE_FILES["image_meta"], "image_meta_file"))
+        missing_inputs.append(MissingInput(image_meta.CACHE_FILES["image_meta"], "image_meta_file"))
 
     for filepath in image_filepaths:
         if not os.path.isfile(filepath):
@@ -103,7 +127,7 @@ def check_inputs(dataset: str) -> None:
         if not os.path.basename(filepath) in transforms.keys():
             missing_inputs.append(MissingInput(os.path.basename(filepath), "transform"))
 
-        mask_name = os.path.join(preprocessing.masks.CACHE_FILES["mask_dir"], os.path.basename(filepath))
+        mask_name = os.path.join(masks.CACHE_FILES["mask_dir"], os.path.basename(filepath))
 
         if not os.path.isfile(mask_name):
             missing_inputs.append(MissingInput(mask_name, "frame_mask"))
@@ -158,7 +182,7 @@ def generate_inputs(dataset: str):
         print("================================\n")
 
     big_print("Collecting metadata")
-    preprocessing.image_meta.collect_metadata()
+    image_meta.collect_metadata()
 
     big_print("Finding fiducial locations")
     raise NotImplementedError("Frame matching works in a different way now")
@@ -172,3 +196,7 @@ def generate_inputs(dataset: str):
     preprocessing.masks.generate_masks()
 
     big_print("Finished. The processing pipeline is ready")
+
+
+if __name__ == "__main__":
+    print(get_dataset_filenames(""))
