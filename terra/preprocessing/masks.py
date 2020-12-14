@@ -1,6 +1,7 @@
 import concurrent.futures
 import os
 import pickle
+import warnings
 from collections import deque
 from typing import Optional
 
@@ -28,6 +29,11 @@ CACHE_FILES = {
 # This reduces the reliance on intermediate files, but might as a consequence be slower.
 
 def prepare_frame(original_frame: np.ndarray, buffer_size: int = 20) -> np.ndarray:
+    """
+    Preprocess an image frame to produce a good image mask.
+
+    :param buffer_size: The amount of pixels to buffer the calculated reference frame with.
+    """
     # Remove imperfections in the mask by flood-filling it, starting from the centre.
     center_xy = (original_frame.shape[1] // 2, original_frame.shape[0] // 2)
     cv2.floodFill(image=original_frame, mask=None, seedPoint=center_xy, newVal=200)
@@ -40,29 +46,33 @@ def prepare_frame(original_frame: np.ndarray, buffer_size: int = 20) -> np.ndarr
     return buffered_mask
 
 
-def generate_masks(buffer_size: int = 20) -> None:
+def generate_masks(overwrite_existing: bool = False) -> None:
     """
     Generate frame masks for all images with a frame transform.
-
-    First, a reference frame mask is generated from all images.
-    Then this reference is transformed back to each image's original transform.
-
-    param: buffer_size: The amount of pixels to buffer the calculated reference frame with.
     """
     transforms = fiducials.get_all_instrument_transforms(verbose=False)
 
-    reference_frame_names = os.listdir(os.path.join(fiducials.CACHE_FILES["fiducial_template_dir"], "frames/"))
+    reference_frame_names = os.listdir(fiducials.CACHE_FILES["image_frames_dir"])
     instruments = [frame_filename.replace("frame_", "").replace(".tif", "") for frame_filename in reference_frame_names]
-    reference_frames = {instrument: prepare_frame(cv2.imread(filepath, cv2.IMREAD_GRAYSCALE))
-                        for instrument, filepath in zip(instruments, reference_frame_names)}
+    reference_frames = {instrument: prepare_frame(cv2.imread(
+        os.path.join(fiducials.CACHE_FILES["image_frames_dir"], filename),
+        cv2.IMREAD_GRAYSCALE
+    )) for instrument, filename in zip(instruments, reference_frame_names)}
 
     instrument_filenames = {instrument: image_meta.get_filenames_for_instrument(
         instrument) for instrument in instruments}
 
+    warnings.warn("Only Wild109 is kept!")
+    for instrument in list(instrument_filenames.keys()):
+        if instrument not in ["Wild109"]:
+            del instrument_filenames[instrument]
+
+    filenames_to_process = []
     filename_instruments: dict[str, str] = {}
     for instrument in instrument_filenames:
         for filename in instrument_filenames[instrument]:
             filename_instruments[filename] = instrument
+            filenames_to_process.append(filename)
 
     # Reserve the variable for progress bars which jump in and out of existence
     progress_bar: Optional[tqdm] = None
@@ -79,6 +89,8 @@ def generate_masks(buffer_size: int = 20) -> None:
         return: None
         """
         full_path = os.path.join(CACHE_FILES["mask_dir"], filename)
+        if os.path.isfile(full_path) and not overwrite_existing:
+            return
         # Read the shape of the original image
         original_shape = cv2.imread(os.path.join(
             files.INPUT_DIRECTORIES["image_dir"], filename), cv2.IMREAD_GRAYSCALE).shape
@@ -92,11 +104,11 @@ def generate_masks(buffer_size: int = 20) -> None:
 
     print("Transforming masks and writing them")
     # Transform the masks to the images' original transform.
-    with tqdm(total=len(transforms.keys())) as progress_bar:
+    with tqdm(total=len(filenames_to_process)) as progress_bar:
         with concurrent.futures.ThreadPoolExecutor(max_workers=CONSTANTS.max_threads) as executor:
             # Unwrap the generator using a zero-length deque (empty collection) in order to actually run it.
             # Why this is needed is beyond me!
-            deque(executor.map(transform_and_write_frame, list(transforms.keys())), maxlen=0)
+            deque(executor.map(transform_and_write_frame, filenames_to_process), maxlen=0)
 
 
 def show_reference_mask():

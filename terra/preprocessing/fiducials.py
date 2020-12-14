@@ -20,6 +20,7 @@ from terra.preprocessing import image_meta, manual_picking
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "fiducials")
 CACHE_FILES = {
     "fiducial_template_dir": os.path.join(TEMP_DIRECTORY, "templates"),
+    "image_frames_dir": os.path.join(TEMP_DIRECTORY, "templates/image_frames/"),
     "fiducial_location_dir": os.path.join(TEMP_DIRECTORY, "locations"),
 }
 # Define the order in which fiducial corners are considered.
