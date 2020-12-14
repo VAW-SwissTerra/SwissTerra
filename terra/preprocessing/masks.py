@@ -62,10 +62,6 @@ def generate_masks(overwrite_existing: bool = False) -> None:
     instrument_filenames = {instrument: image_meta.get_filenames_for_instrument(
         instrument) for instrument in instruments}
 
-    warnings.warn("Only Wild109 is kept!")
-    for instrument in list(instrument_filenames.keys()):
-        if instrument not in ["Wild109"]:
-            del instrument_filenames[instrument]
 
     filenames_to_process = []
     filename_instruments: dict[str, str] = {}
