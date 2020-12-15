@@ -439,18 +439,71 @@ def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
             chunk.importRaster(path=filepaths[i][1], crs=chunk.crs, raster_type=ms.DataSource.ElevationData)
 
 
-@ statictypes.convert
-def build_orthomosaics(chunks: List[ms.Chunk], resolution: float) -> None:
+def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> None:
     """
     Build orthomosaics for each chunk.
 
     param: chunks: The chunks to build orthomosaics for.
     param: resolution: The orthomosaic resolution in metres.
     """
-    warnings.warn("Orthomosaic function is outdated", Warning)
-    for chunk in tqdm(chunks):
-        with no_stdout(disable=False):
+    progress_bar = tqdm(total=len(pairs))
+
+    for pair in pairs:
+        progress_bar.desc = f"Generating orthomosaic for {pair}"
+        for camera in chunk.cameras:
+            camera.enabled = pair in camera.group.label
+
+        corresponding_dem_list = [dem for dem in chunk.elevations if pair == dem.label]
+
+        if len(corresponding_dem_list) == 0:
+            print(f"Pair {pair} has no DEM. Skipping orthomosaic generation")
+            progress_bar.update()
+            continue
+        chunk.elevation = corresponding_dem_list[0]
+
+        with no_stdout():
             chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData, resolution=resolution)
+
+        chunk.orthomosaics[-1].label = pair
+        chunk.orthomosaic = None
+        progress_bar.update()
+
+    chunk.elevation = None
+    progress_bar.close()
+
+
+def export_orthomosaics(chunk: ms.Chunk, pairs: list[str], directory: str, overwrite: bool = False):
+
+    os.makedirs(directory, exist_ok=True)
+
+    progress_bar = tqdm(total=len(pairs))
+
+    compression_type = ms.ImageCompression()
+    compression_type.tiff_compression = ms.ImageCompression.TiffCompressionJPEG
+    compression_type.jpeg_quality = 90
+
+    for pair in pairs:
+        progress_bar.desc = f"Exporting orthomosaic for {pair}"
+        output_filepath = os.path.join(directory, f"{pair}_orthomosaic.tif")
+
+        if not overwrite and os.path.isfile(output_filepath):
+            progress_bar.update()
+            continue
+
+        corresponding_ortho_list = [ortho for ortho in chunk.orthomosaics if ortho.label == pair]
+
+        if len(corresponding_ortho_list) == 0:
+            progress_bar.update()
+            continue
+        chunk.orthomosaic = corresponding_ortho_list[0]
+
+        with no_stdout():
+            chunk.exportRaster(
+                path=output_filepath,
+                source_data=ms.DataSource.OrthomosaicData,
+                image_compression=compression_type
+            )
+        progress_bar.update()
 
 
 def merge_chunks(doc: ms.Document, chunks: List[ms.Chunk], optimize: bool = True, remove_old: bool = False) -> ms.Chunk:
@@ -675,8 +728,12 @@ def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
 
     if step == Step.DENSE_CLOUD:
         labels_to_check = [cloud.label for cloud in chunk.dense_clouds]
+    elif step == Step.DEM:
+        labels_to_check = [dem.label for dem in chunk.elevations]
+    elif step == Step.ORTHOMOSAIC:
+        labels_to_check = [ortho.label for ortho in chunk.orthomosaics]
     else:
-        raise NotImplementedError()
+        raise NotImplementedError(f"Step {step} not implemented")
 
     unfinished_pairs = [pair for pair in pairs if pair not in labels_to_check]
 
@@ -743,6 +800,12 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         dem_filepaths = dict(executor.map(build_dem, filepaths.items()))
+
+    for dem_label, dem_filepath in dem_filepaths.items():
+        with no_stdout():
+            chunk.importRaster(path=dem_filepath, crs=chunk.crs, raster_type=ms.DataSource.ElevationData)
+        chunk.elevations[-1].label = dem_label
+        chunk.elevation = None
 
     progress_bar.close()
     return dem_filepaths

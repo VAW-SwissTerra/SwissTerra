@@ -9,3 +9,5 @@ TODO
 setup-devel.sh
 docs/build/
 metashape.lic
+export/
+temp.py
