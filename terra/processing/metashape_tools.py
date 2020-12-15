@@ -65,7 +65,10 @@ def is_document(dataset: str) -> bool:
 
     :returns: exists: Whether the document exists or not.
     """
-    return os.path.isfile(CACHE_FILES[f"{dataset}_metashape_project"])
+    cache_file_key = f"{dataset}_metashape_project"
+    if cache_file_key not in CACHE_FILES:
+        return False
+    return os.path.isfile(CACHE_FILES[cache_file_key])
 
 
 @statictypes.enforce
@@ -307,8 +310,9 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
     :param chunk: The active chunk.
     :param sensor: The sensor to assign the fiducials to.
     """
+    instrument = chunk.meta["dataset"].split("_")[0]
     fiducial_marks = pd.read_csv(
-        os.path.join(fiducials.CACHE_FILES["fiducial_location_dir"], f"fiducials_{chunk.meta['dataset']}.csv"),
+        os.path.join(fiducials.CACHE_FILES["fiducial_location_dir"], f"fiducials_{instrument}.csv"),
         index_col=0)
 
     new_fiducials = {}
@@ -608,6 +612,8 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
 
     :returns: merged_chunk: The chunk with all stereo-pairs.
     """
+    warnings.warn("GPU processing turned off")
+    ms.app.gpu_mask = 0
     # Load image metadata to get the station numbers
     image_meta = inputs.get_dataset_metadata(dataset)
 

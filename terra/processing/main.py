@@ -24,8 +24,7 @@ def log(dataset: str, event: str):
         writer.writerow([current_time, dataset, event])
 
 
-@ statictypes.enforce
-def process_dataset(dataset: str, redo: bool = False) -> None:
+def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     """
     Process a dataset from start to finish.
 
@@ -113,3 +112,13 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
     notify(f"{dataset} finished")
     log(dataset, "Processing finished")
+
+
+def process_dataset(dataset: str, redo: bool = False):
+    log(dataset, "Processing started")
+
+    try:
+        run_processing_pipeline(dataset, redo=redo)
+    except Exception as exception:
+        log(dataset, "Processing failed")
+        raise exception
