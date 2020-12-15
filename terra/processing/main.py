@@ -1,5 +1,6 @@
 """The main processing pipeline."""
 
+import csv
 import os
 import shutil
 import subprocess
@@ -14,7 +15,16 @@ from terra.processing import inputs, metashape_tools
 from terra.utilities import no_stdout, notify
 
 
-@statictypes.enforce
+def log(dataset: str, event: str):
+
+    current_time = time.strftime("UTC %Y/%m/%d %H:%M:%S", time.gmtime(time.time()))
+    os.makedirs(os.path.dirname(inputs.CACHE_FILES["log_filepath"]), exist_ok=True)
+    with open(inputs.CACHE_FILES["log_filepath"], "a+") as outfile:
+        writer = csv.writer(outfile)
+        writer.writerow([current_time, dataset, event])
+
+
+@ statictypes.enforce
 def process_dataset(dataset: str, redo: bool = False) -> None:
     """
     Process a dataset from start to finish.
@@ -37,6 +47,7 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
     # Load or create a chunk with all the stereo-pairs
     chunk = metashape_tools.load_or_remake_chunk(doc, dataset)
+    log(dataset, "Dataset is aligned")
 
     # Get the names of the stereo-pairs
     pairs = metashape_tools.get_chunk_stereo_pairs(chunk)
@@ -45,7 +56,6 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
     # Check if coalignment should be done. If there is no "tie_station*" markers, it hasn't been done yet
     coalign = not any(["tie_station" in marker.label for marker in chunk.markers])
-
     if coalign:
         # Check which pairs do not yet have a dense cloud
         missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
@@ -61,16 +71,19 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
         metashape_tools.remove_bad_markers(chunk, marker_error_threshold=3)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
 
+        log(dataset, "Coalignment successful")
+
     missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DENSE_CLOUD)
     if len(missing_clouds_pairs) > 0:
         print(f"Building {len(missing_clouds_pairs)} dense clouds")
         time.sleep(0.3)
-        metashape_tools.build_dense_clouds(
+        successful = metashape_tools.build_dense_clouds(
             chunk=chunk,
             pairs=missing_clouds_pairs,
             quality=metashape_tools.Quality.ULTRA,
             filtering=metashape_tools.Filtering.MILD
         )
+        log(dataset, f"Made {len(successful)} dense clouds")
     metashape_tools.save_document(doc)
     missing_dem_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DEM)
     if len(missing_dem_pairs) > 0:
@@ -80,13 +93,14 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
         os.makedirs("export/dems", exist_ok=True)
         for filepath in dem_filepaths.values():
             shutil.copyfile(filepath, os.path.join("export/dems", os.path.basename(filepath)))
+        log(dataset, f"Made {len(dem_filepaths)} DEMs")
 
     metashape_tools.save_document(doc)
 
     missing_ortho_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.ORTHOMOSAIC)
     if len(missing_ortho_pairs) > 0:
-        print(f"Building {len(missing_ortho_pairs)} orthomosaics")
-        metashape_tools.build_orthomosaics(chunk=chunk, pairs=missing_ortho_pairs, resolution=1)
+        successful = metashape_tools.build_orthomosaics(chunk=chunk, pairs=missing_ortho_pairs, resolution=1)
+        print(f"Made {len(successful)} orthomosaics")
 
     metashape_tools.save_document(doc)
     metashape_tools.export_orthomosaics(chunk=chunk, pairs=pairs, directory="export/orthos")
@@ -98,32 +112,4 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
             os.remove(os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], filename))
 
     notify(f"{dataset} finished")
-    return
-
-    # Rebuild the dense clouds with the proper pose
-    # metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.ULTRA,
-    #                             filtering=metashape.Filtering.MILD)
-    metashape_tools.save_document(doc)
-
-    metashape_tools.build_dems(chunk=chunk, pairs=pairs, resolution=CONSTANTS.dem_resolution)
-    metashape_tools.save_document(doc)
-
-    chunks_to_process = metashape_tools.get_unfinished_chunks(aligned_chunks, metashape_tools.Step.DENSE_CLOUD)
-    if len(chunks_to_process) > 0:
-        print("Building dense clouds")
-        metashape_tools.build_dense_clouds(chunks_to_process, quality=metashape_tools.Quality.HIGH)
-        metashape_tools.save_document(doc)
-
-    chunks_to_process = metashape_tools.get_unfinished_chunks(aligned_chunks, metashape_tools.Step.DEM)
-    if len(chunks_to_process) > 0:
-        print("Building DEMs")
-        metashape_tools.build_dems(chunks_to_process, dataset)
-        metashape_tools.save_document(doc)
-
-    return
-
-    chunks_to_process = metashape_tools.get_unfinished_chunks(aligned_chunks, metashape_tools.Step.ORTHOMOSAIC)
-    if len(chunks_to_process) > 0:
-        print("Building orthomosaics")
-        metashape_tools.build_orthomosaics(chunks_to_process, resolution=1)
-        metashape_tools.save_document(doc)
+    log(dataset, "Processing finished")

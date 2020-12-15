@@ -61,9 +61,9 @@ def is_document(dataset: str) -> bool:
     """
     Check if a Metashape document exists.
 
-    param: dataset: The name of the dataset.
+    :param dataset: The name of the dataset.
 
-    return: exists: Whether the document exists or not.
+    :returns: exists: Whether the document exists or not.
     """
     return os.path.isfile(CACHE_FILES[f"{dataset}_metashape_project"])
 
@@ -73,9 +73,9 @@ def new_document(dataset: str) -> ms.Document:
     """
     Create a new Metashape document.
 
-    param: dataset: The dataset name.
+    :param dataset: The dataset name.
 
-    return: doc: The newly created Metashape document.
+    :returns: doc: The newly created Metashape document.
     """
     # Make the temporary directory (also makes the project root directory)
     os.makedirs(inputs.CACHE_FILES[f"{dataset}_temp_dir"], exist_ok=True)
@@ -97,9 +97,9 @@ def load_document(dataset: str) -> ms.Document:
     """
     Load an already existing Metashape document.
 
-    param: dataset: The dataset name.
+    :param dataset: The dataset name.
 
-    return: doc: The newly created Metashape document.
+    :returns: doc: The newly created Metashape document.
     """
     with no_stdout():
         doc = ms.Document()
@@ -125,10 +125,10 @@ def get_unfinished_chunks(chunks: List[ms.Chunk], step: Step) -> List[ms.Chunk]:
     """
     Check whether a step is finished.
 
-    param: chunks: The chunks to check.
-    param: step: The step to check.
+    :param chunks: The chunks to check.
+    :param step: The step to check.
 
-    return: unfinished: The chunks whose step is unfinished.
+    :returns: unfinished: The chunks whose step is unfinished.
     """
     unfinished: List[ms.Chunk] = []
     for chunk in chunks:
@@ -153,9 +153,9 @@ def has_alignment(chunk: ms.Chunk) -> bool:
     """
     Check whether some or all cameras in a chunk are aligned.
 
-    param: chunk: The chunk to check.
+    :param chunk: The chunk to check.
 
-    return: any_alignment: Whether at least one camera is aligned.
+    :returns: any_alignment: Whether at least one camera is aligned.
     """
     any_alignment = any([camera.transform is not None for camera in chunk.cameras])
     return any_alignment
@@ -166,10 +166,10 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
     """
     Create a new chunk in a document, add photos, and set appropriate parameters for them.
 
-    param: doc: The active Metashape document.
-    param: filenames: The names of the files to be added to the chunk.
+    :param doc: The active Metashape document.
+    :param filenames: The names of the files to be added to the chunk.
 
-    return: The newly created Metashape chunk.
+    :returns: The newly created Metashape chunk.
     """
     with no_stdout():
         chunk = doc.addChunk()
@@ -247,8 +247,8 @@ def import_reference(chunk: ms.Chunk, filepath: str) -> None:
     The camera location CRS is assumed to be the same as the chunk CRS.
     The camera orientation format is assumed to be in Yaw, Pitch, Roll
 
-    param: chunk: The chunk to add the reference to.
-    param: filepath: The filepath of the reference csv.
+    :param chunk: The chunk to add the reference to.
+    :param filepath: The filepath of the reference csv.
     """
     chunk.euler_angles = ms.EulerAnglesOPK
 
@@ -268,10 +268,10 @@ def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
     """
     Align all cameras in a chunk.
 
-    param: chunk: The chunk whose images shall be aligned.
-    param: fixed_sensor: Whether to fix the sensors during the alignment.
+    :param chunk: The chunk whose images shall be aligned.
+    :param fixed_sensor: Whether to fix the sensors during the alignment.
 
-    return: aligned: Whether the alignment was successful or not.
+    :returns: aligned: Whether the alignment was successful or not.
     """
     fixed_sensors = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
     if fixed_sensor:
@@ -304,8 +304,8 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
     """
     Generate fiducials for the specified sensor.
 
-    param: chunk: The active chunk.
-    param: sensor: The sensor to assign the fiducials to.
+    :param chunk: The active chunk.
+    :param sensor: The sensor to assign the fiducials to.
     """
     fiducial_marks = pd.read_csv(
         os.path.join(fiducials.CACHE_FILES["fiducial_location_dir"], f"fiducials_{chunk.meta['dataset']}.csv"),
@@ -337,20 +337,20 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
                 True)
 
 
-@statictypes.convert
 def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Quality.HIGH,
-                       filtering: Filtering = Filtering.AGGRESSIVE, all_together: bool = False) -> None:
+                       filtering: Filtering = Filtering.AGGRESSIVE, all_together: bool = False) -> list[str]:
     """
     Generate dense clouds for all stereo-pairs in a given chunk.
 
-    param: chunk: The chunk to process.
-    param: pairs: A list of the stereo-pairs to process.
-    param: quality: The quality of the dense cloud.
-    param: filtering: The dense cloud filtering setting.
-    param: all_together: Whether to process every stereo-pair together.
+    :param chunk: The chunk to process.
+    :param pairs: A list of the stereo-pairs to process.
+    :param quality: The quality of the dense cloud.
+    :param filtering: The dense cloud filtering setting.
+    :param all_together: Whether to process every stereo-pair together.
     """
+    successful_pairs: list[str] = []
 
-    def generate_dense_cloud(cameras: List[ms.Camera], label) -> None:
+    def generate_dense_cloud(cameras: List[ms.Camera], label) -> bool:
         for camera in chunk.cameras:
             # Set it as enabled if the camera group label fits with the stereo pair label
             camera.enabled = camera in cameras
@@ -361,7 +361,7 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
                 chunk.buildDenseCloud(point_confidence=True)
             except Exception as exception:
                 if "Zero resolution" in str(exception):
-                    return
+                    return False
                 raise exception
 
             chunk.dense_cloud.label = label
@@ -370,6 +370,7 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
             chunk.dense_cloud.setConfidenceFilter(0, CONSTANTS.dense_cloud_min_confidence - 1)
             chunk.dense_cloud.removePoints(list(range(128)))
             chunk.dense_cloud.resetFilters()
+        return True
 
     if all_together:
         print("Generating dense cloud from all stereo-pairs")
@@ -382,7 +383,9 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
                 progress_bar.update(n=0)  # Update the new text
 
                 cameras_to_process = [camera for camera in chunk.cameras if pair in camera.group.label]
-                generate_dense_cloud(cameras_to_process, label=pair)
+                successful = generate_dense_cloud(cameras_to_process, label=pair)
+                if successful:
+                    successful_pairs.append(pair)
                 # Unset the dense cloud as default to allow for more dense clouds to be constructed
                 chunk.dense_cloud = None
 
@@ -392,14 +395,16 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Qua
         for camera in chunk.cameras:
             camera.enabled = True
 
+    return successful_pairs
+
 
 @ statictypes.convert
 def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
     """
     Build DEMs using PDAL and GDAL.
 
-    param: chunks: The chunks to build DEMs for.
-    param: dataset: The name of the dataset.
+    :param chunks: The chunks to build DEMs for.
+    :param dataset: The name of the dataset.
     """
     warnings.warn("DEM function is outdated", Warning)
     # Fill this with tuples: (dense_cloud_path, dem_path)
@@ -423,7 +428,7 @@ def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
         """
         Execute DEM generation in a thread.
 
-        param: cloud_and_dem_paths: A tuple of (dense_cloud_path, dem_path).
+        :param cloud_and_dem_paths: A tuple of (dense_cloud_path, dem_path).
         """
         processing_tools.generate_dem(*cloud_and_dem_paths)
         progress_bar.update()
@@ -439,14 +444,16 @@ def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
             chunk.importRaster(path=filepaths[i][1], crs=chunk.crs, raster_type=ms.DataSource.ElevationData)
 
 
-def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> None:
+def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> list[str]:
     """
     Build orthomosaics for each chunk.
 
-    param: chunks: The chunks to build orthomosaics for.
-    param: resolution: The orthomosaic resolution in metres.
+    :param chunks: The chunks to build orthomosaics for.
+    :param resolution: The orthomosaic resolution in metres.
     """
     progress_bar = tqdm(total=len(pairs))
+
+    successful_pairs: list[str] = []
 
     for pair in pairs:
         progress_bar.desc = f"Generating orthomosaic for {pair}"
@@ -466,10 +473,13 @@ def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> 
 
         chunk.orthomosaics[-1].label = pair
         chunk.orthomosaic = None
+        successful_pairs.append(pair)
         progress_bar.update()
 
     chunk.elevation = None
     progress_bar.close()
+
+    return successful_pairs
 
 
 def export_orthomosaics(chunk: ms.Chunk, pairs: list[str], directory: str, overwrite: bool = False):
@@ -510,12 +520,12 @@ def merge_chunks(doc: ms.Document, chunks: List[ms.Chunk], optimize: bool = True
     """
     Merge Metashape chunks.
 
-    param: doc: The Metashape document.
-    param: chunks: A list of chunks to merge.
-    param: optimize: Whether to optimize cameras after merging.
-    param: remove_old: Whether to remove
+    :param doc: The Metashape document.
+    :param chunks: A list of chunks to merge.
+    :param optimize: Whether to optimize cameras after merging.
+    :param remove_old: Whether to remove
 
-    return: merged_chunk: The merged chunk.
+    :returns: merged_chunk: The merged chunk.
 
     """
     chunk_positions = []
@@ -593,10 +603,10 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
     1. Align all stereo-pairs in separate chunks.
     2. Merge the chunks.
 
-    param: doc: The Metashape document to check
-    param: dataset: The name of the dataset.
+    :param doc: The Metashape document to check
+    :param dataset: The name of the dataset.
 
-    return: merged_chunk: The chunk with all stereo-pairs.
+    :returns: merged_chunk: The chunk with all stereo-pairs.
     """
     # Load image metadata to get the station numbers
     image_meta = inputs.get_dataset_metadata(dataset)
@@ -653,8 +663,8 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
     """
     Get the reprojection error between a marker's projection and a camera's reprojected position.
 
-    param: camera: The camera to reproject the marker position to.
-    param: marker: The marker to compare the projection vs. reprojection on.
+    :param camera: The camera to reproject the marker position to.
+    :param marker: The marker to compare the projection vs. reprojection on.
     """
     projected_position = marker.projections[camera].coord
     reprojected_position = camera.project(marker.position)
@@ -699,9 +709,9 @@ def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
     """
     Get a list of stereo-pair group names.
 
-    param: chunk: The chunk to analyse.
+    :param chunk: The chunk to analyse.
 
-    return: pairs: A list of stereo-pair group names.
+    :returns: pairs: A list of stereo-pair group names.
 
     """
     pairs: List[str] = []
@@ -719,10 +729,10 @@ def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
     """
     List all stereo-pairs that have not yet finished a step.
 
-    param: chunk: The chunk to analyse.
-    param: step: The step to check for.
+    :param chunk: The chunk to analyse.
+    :param step: The step to check for.
 
-    return: unfinished_pairs: A list of stereo-pairs that are unfinished.
+    :returns: unfinished_pairs: A list of stereo-pairs that are unfinished.
     """
     pairs = get_chunk_stereo_pairs(chunk)
 
@@ -745,13 +755,13 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     """
     Build DEMs for each stereo-pair.
 
-    param: chunk: The chunk to export from.
-    param: pairs: Which stereo-pairs to use.
-    param: redo: Whether to remake dense clouds or DEMs if they already exist.
-    param: resolution: The DEM resolution in metres.
-    param: interpolate_pixels: The amount of small gaps to interpolate in the DEMs
+    :param chunk: The chunk to export from.
+    :param pairs: Which stereo-pairs to use.
+    :param redo: Whether to remake dense clouds or DEMs if they already exist.
+    :param resolution: The DEM resolution in metres.
+    :param interpolate_pixels: The amount of small gaps to interpolate in the DEMs
 
-    return: filepaths: The filepaths of the exported clouds for each stereo-pair.
+    :returns: filepaths: The filepaths of the exported clouds for each stereo-pair.
     """
     assert chunk.meta["dataset"] is not None
 
@@ -781,10 +791,10 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
         """
         Generate a DEM from a point cloud.
 
-        param: pair: The stereo-pair label
-        param: filepath: The path to the input point cloud.
+        :param pair: The stereo-pair label
+        :param filepath: The path to the input point cloud.
 
-        return: (pair, output_filepath): The stereo-pair label and the path to the output DEM.
+        :returns: (pair, output_filepath): The stereo-pair label and the path to the output DEM.
         """
         pair, filepath = pair_and_filepath
         progress_bar.desc = f"Generating DEMs for {pair}"
@@ -816,11 +826,11 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.
 
-    param: chunk: The chunk to analyse.
-    param: pairs: The stereo-pairs to coaling.
-    param: max_fitness: The maximum allowed PDAL ICP fitness parameters (presumed to be C2C distance in m)
-    param: tie_group_radius: The distance of all tie points from the centroid of the alignment.
-    param: marker_pixel_accuracy: The approximate accuracy in pixels to give to Metashape.
+    :param chunk: The chunk to analyse.
+    :param pairs: The stereo-pairs to coaling.
+    :param max_fitness: The maximum allowed PDAL ICP fitness parameters (presumed to be C2C distance in m)
+    :param tie_group_radius: The distance of all tie points from the centroid of the alignment.
+    :param marker_pixel_accuracy: The approximate accuracy in pixels to give to Metashape.
     """
     if chunk.meta["dataset"] is None:
         raise ValueError("Chunk dataset meta is undefined")
@@ -909,10 +919,10 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             """
             Check if a camera projection is valid, e.g. if it's not outside the camera bounds.
 
-            param: camera: The camera to check the projection validity on.
-            param: projected_position: The pixel position of the projection to evaluate.
+            :param camera: The camera to check the projection validity on.
+            :param projected_position: The pixel position of the projection to evaluate.
 
-            return: is_valid: If the projection seems valid or not.
+            :returns: If the projection seems valid or not.
 
 
             """
@@ -937,10 +947,10 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             """
             Find a camera that can "see" all the given positions.
 
-            param: pair: Which stereo-pair to look for a camera in.
-            param: positions: The positions to check if they are visible or not.
+            :param pair: Which stereo-pair to look for a camera in.
+            :param positions: The positions to check if they are visible or not.
 
-            return: good_camera: A camera that can "see" all the given positions.
+            :returns: good_camera: A camera that can "see" all the given positions.
             """
             cameras_in_pair = [camera for camera in chunk.cameras if pair in camera.group.label]
 
@@ -1014,8 +1024,8 @@ def optimize_cameras(chunk: ms.Chunk, fixed_sensors: bool = False) -> None:
     """
     Optimize the chunk camera alignment.
 
-    param: chunk: The chunk whose camera alignment should be optimized.
-    param: fixed_sensors: Whether to temporarily fix the sensor values on optimization.
+    :param chunk: The chunk whose camera alignment should be optimized.
+    :param fixed_sensors: Whether to temporarily fix the sensor values on optimization.
     """
     # Parameters to either solve for or not to solve for in camera optimization
     parameters = ["fit_f", "fit_cx", "fit_cy", "fit_b1", "fit_b2",
@@ -1057,8 +1067,8 @@ def remove_bad_markers(chunk, marker_error_threshold: float = 4.0):
 
     If an ICP tie point is too high, all of its family members will be removed as well.
 
-    param: chunk: The chunk to analyse.
-    param: marker_error_threshold: The marker reprojection error threshold to accept.
+    :param chunk: The chunk to analyse.
+    :param marker_error_threshold: The marker reprojection error threshold to accept.
     """
     # Get the rms reprojection error for each marker
     errors = get_rms_marker_reprojection_errors(chunk.markers)

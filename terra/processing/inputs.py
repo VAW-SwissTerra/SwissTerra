@@ -7,11 +7,10 @@ import pandas as pd
 from terra import files
 from terra.preprocessing import fiducials, georeferencing, image_meta, masks
 
-CACHE_FILES = {
-}
-
-
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "processing")
+CACHE_FILES = {
+    "log_filepath": os.path.join(TEMP_DIRECTORY, "progress.log"),
+}
 
 
 def get_dataset_names() -> list[str]:

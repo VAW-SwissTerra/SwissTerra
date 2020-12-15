@@ -70,7 +70,7 @@ def parse_args():
     preprocessing_parser.set_defaults(func=preprocessing_commands)
 
     # Processing
-    datasets = processing.inputs.get_dataset_names()
+    datasets = processing.inputs.get_dataset_names() + ["all"]
     choices = {dataset: f"Process the {dataset} dataset" for dataset in datasets}
     processing_parser = commands.add_parser("processing", formatter_class=argparse.RawTextHelpFormatter,
                                             help="Main data processing.", description="Main data processing")
