@@ -2,7 +2,8 @@
 
 import os
 import shutil
-import warnings
+import subprocess
+import time
 
 import Metashape as ms
 import statictypes
@@ -22,8 +23,6 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
     param: redo: Whether to redo steps that already exist.
 
     """
-    dataset = "Wild109"
-    warnings.warn("Hardcoded instrument Wild109")
 
     # Load the metashape document or create a new one
     if not redo and metashape_tools.is_document(dataset):
@@ -44,53 +43,59 @@ def process_dataset(dataset: str, redo: bool = False) -> None:
 
     metashape_tools.save_document(doc)
 
-    # TODO: Remove this when ICP seems to be working.
-    # Import reference markers and fit the camera model
-    if False:
-        for marker in chunk.markers:
-            if "Tie " in marker.label:
-                break
-        else:
-            chunk.importMarkers(os.path.join(files.INPUT_ROOT_DIRECTORY, "datasets", "rhone", "tie_points.xml"))
-            metashape_tools.optimize_cameras(chunk)
+    # Check if coalignment should be done. If there is no "tie_station*" markers, it hasn't been done yet
+    coalign = not any(["tie_station" in marker.label for marker in chunk.markers])
 
-    # Remove the reference markers but keep the camera model fixed onward.
-    if False:
-        for marker in chunk.markers:
-            if "Tie " in marker.label:
-                chunk.remove(marker)
-    metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
+    if coalign:
+        # Check which pairs do not yet have a dense cloud
+        missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
+        # Make missing dense clouds
+        if len(missing_clouds_pairs) > 0:
+            metashape_tools.build_dense_clouds(chunk, pairs=missing_clouds_pairs, quality=metashape_tools.Quality.ULTRA,
+                                               filtering=metashape_tools.Filtering.MILD)
+        metashape_tools.save_document(doc)
 
-    # Check which pairs do not yet have a dense cloud
-    unfinished_pairs = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
-    # Make missing dense clouds
-    if len(unfinished_pairs) > 0:
-        metashape_tools.build_dense_clouds(chunk, pairs=unfinished_pairs, quality=metashape_tools.Quality.ULTRA,
-                                           filtering=metashape_tools.Filtering.MILD)
+        # Coalign stereo-pair DEMs with each other and generate markers from their alignment
+        metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
+        metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
+        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=3)
+        metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
+
+    missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DENSE_CLOUD)
+    if len(missing_clouds_pairs) > 0:
+        print(f"Building {len(missing_clouds_pairs)} dense clouds")
+        time.sleep(0.3)
+        metashape_tools.build_dense_clouds(
+            chunk=chunk,
+            pairs=missing_clouds_pairs,
+            quality=metashape_tools.Quality.ULTRA,
+            filtering=metashape_tools.Filtering.MILD
+        )
+    metashape_tools.save_document(doc)
+    missing_dem_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DEM)
+    if len(missing_dem_pairs) > 0:
+        print(f"Building {len(missing_dem_pairs)} DEMs")
+        dem_filepaths = metashape_tools.build_dems(chunk=chunk, pairs=missing_dem_pairs)
+
+        os.makedirs("export/dems", exist_ok=True)
+        for filepath in dem_filepaths.values():
+            shutil.copyfile(filepath, os.path.join("export/dems", os.path.basename(filepath)))
+
     metashape_tools.save_document(doc)
 
-    # Coalign stereo-pair DEMs with each other and generate markers from their alignment
-    metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
-    metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
-    metashape_tools.remove_bad_markers(chunk, marker_error_threshold=3)
-    metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
+    missing_ortho_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.ORTHOMOSAIC)
+    if len(missing_ortho_pairs) > 0:
+        print(f"Building {len(missing_ortho_pairs)} orthomosaics")
+        metashape_tools.build_orthomosaics(chunk=chunk, pairs=missing_ortho_pairs, resolution=1)
 
-    metashape_tools.build_dense_clouds(chunk, pairs=pairs, quality=metashape_tools.Quality.HIGH,
-                                       filtering=metashape_tools.Filtering.MILD, all_together=True)
-
-    print("Generating DEM")
-    with no_stdout():
-        chunk.buildDem()
-
-    # metashape.build_dense_clouds(chunk, pairs=pairs, quality=metashape.Quality.HIGH,
-    #                             filtering=metashape.Filtering.MILD)
-
-    # Run a bundle adjustment with these new markers.
-    # metashape.optimize_cameras(chunk)
-
-    # Remove markers that still have an unreasonable error and run another bundle adjustment.
-    # metashape.optimize_cameras(chunk)
     metashape_tools.save_document(doc)
+    metashape_tools.export_orthomosaics(chunk=chunk, pairs=pairs, directory="export/orthos")
+    metashape_tools.save_document(doc)
+
+    # Remove all ply files (dense clouds that take up a lot of space and are saved in Metashape anyway
+    for filename in os.listdir(inputs.CACHE_FILES[f"{dataset}_temp_dir"]):
+        if filename.endswith(".ply"):
+            os.remove(os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], filename))
 
     notify(f"{dataset} finished")
     return

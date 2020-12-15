@@ -8,3 +8,5 @@ TODO
 .git-devel/
 setup-devel.sh
 docs/build/
+export/
+temp.py
