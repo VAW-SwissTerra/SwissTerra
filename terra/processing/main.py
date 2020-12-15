@@ -71,6 +71,8 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
 
         log(dataset, "Coalignment successful")
+    else:
+        log(dataset, "Coalignment already exists")
 
     missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DENSE_CLOUD)
     if len(missing_clouds_pairs) > 0:
