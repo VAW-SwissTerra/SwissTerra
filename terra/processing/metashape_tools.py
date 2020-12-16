@@ -827,7 +827,7 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     return dem_filepaths
 
 
-def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 13.0,
+def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 20.0,
                          tie_group_radius: float = 30.0, marker_pixel_accuracy=4.0):
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.
