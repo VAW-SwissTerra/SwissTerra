@@ -8,14 +8,12 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import statictypes
 
 from terra import files, preprocessing
 from terra.constants import CONSTANTS
 from terra.preprocessing import fiducials, image_meta, manual_picking
 
 
-@statictypes.enforce
 def get_instrument_names() -> np.ndarray:
     """Return the names of each instrument in the metadata cache."""
     image_meta = preprocessing.image_meta.read_metadata()

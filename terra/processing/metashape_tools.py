@@ -11,7 +11,6 @@ from typing import Optional
 import Metashape as ms
 import numpy as np
 import pandas as pd
-import statictypes
 from tqdm import tqdm
 
 from terra import files
@@ -55,7 +54,6 @@ class Step(Enum):
     ORTHOMOSAIC = 4
 
 
-@statictypes.enforce
 def is_document(dataset: str) -> bool:
     """
     Check if a Metashape document exists.
@@ -70,7 +68,6 @@ def is_document(dataset: str) -> bool:
     return os.path.isfile(CACHE_FILES[cache_file_key])
 
 
-@statictypes.enforce
 def new_document(dataset: str) -> ms.Document:
     """
     Create a new Metashape document.
@@ -94,7 +91,6 @@ def new_document(dataset: str) -> ms.Document:
     return doc
 
 
-@statictypes.enforce
 def load_document(dataset: str) -> ms.Document:
     """
     Load an already existing Metashape document.
@@ -122,7 +118,6 @@ def save_document(doc: ms.Document) -> None:
         doc.save()
 
 
-@statictypes.convert
 def get_unfinished_chunks(chunks: list[ms.Chunk], step: Step) -> list[ms.Chunk]:
     """
     Check whether a step is finished.
@@ -151,7 +146,6 @@ def get_unfinished_chunks(chunks: list[ms.Chunk], step: Step) -> list[ms.Chunk]:
     return unfinished
 
 
-@statictypes.enforce
 def has_alignment(chunk: ms.Chunk) -> bool:
     """
     Check whether some or all cameras in a chunk are aligned.
@@ -164,7 +158,6 @@ def has_alignment(chunk: ms.Chunk) -> bool:
     return any_alignment
 
 
-@ statictypes.enforce
 def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str] = None) -> ms.Chunk:
     """
     Create a new chunk in a document, add photos, and set appropriate parameters for them.
@@ -242,7 +235,6 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
     return chunk
 
 
-@statictypes.enforce
 def import_reference(chunk: ms.Chunk, filepath: str) -> None:
     """
     Import camera location and orientation information into Metashape.
@@ -266,7 +258,6 @@ def import_reference(chunk: ms.Chunk, filepath: str) -> None:
             ms.Vector(cam_data[["yaw", "pitch", "roll"]].values)))
 
 
-@statictypes.enforce
 def import_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
     """
     Generate fiducials for the specified sensor from a file with coordinates.
@@ -305,7 +296,6 @@ def import_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
                 True)
 
 
-@statictypes.enforce
 def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
     """
     Align all cameras in a chunk.
@@ -484,7 +474,6 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
     return merged_chunk
 
 
-@ statictypes.enforce
 def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.float64:
     """
     Get the reprojection error between a marker's projection and a camera's reprojected position.
@@ -508,7 +497,6 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
     return diff
 
 
-@ statictypes.enforce
 def get_rms_marker_reprojection_errors(markers: list[ms.Marker]) -> dict[ms.Marker, np.float64]:
     """
     Calculate the mean reprojection error for a marker, checked on all pinned projections.
@@ -530,7 +518,6 @@ def get_rms_marker_reprojection_errors(markers: list[ms.Marker]) -> dict[ms.Mark
     return mean_errors
 
 
-@ statictypes.enforce
 def get_chunk_stereo_pairs(chunk: ms.Chunk) -> list[str]:
     """
     Get a list of stereo-pair group names.
@@ -550,7 +537,6 @@ def get_chunk_stereo_pairs(chunk: ms.Chunk) -> list[str]:
     return pairs
 
 
-@ statictypes.enforce
 def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> list[str]:
     """
     list all stereo-pairs that have not yet finished a step.
@@ -998,7 +984,6 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
             # Assume that the projection is valid if it didn't fill any of the above criterai
             return True
 
-        @ statictypes.enforce
         def find_good_cameras(pair: str, positions: pd.DataFrame) -> list[ms.Camera]:
             """
             Find a camera that can "see" all the given positions.
