@@ -85,7 +85,8 @@ def check_filetype(estimated_filetype: str, allowed_types: Union[str, List[str]]
 
 def remove_locks() -> None:
     """Remove Metashape 'lock' files that persist after a crash"""
-    from terra import processing  # TODO: Check why this is needed here (probably circular imports)
+    # TODO: Check why this is needed here (probably circular imports)
+    from terra import processing  # pylint: disable=import-outside-toplevel
 
     removal_count = 0
 
@@ -118,8 +119,8 @@ def list_cache() -> None:
 def check_data() -> None:
     """Check that all data can be found and that they have the correct file types."""
     max_entries = 50  # The maximum amount of wrong entries to find before stopping
-    invalid_files = []
-    missing_files = []
+    invalid_files: list[str] = []
+    missing_files: list[str] = []
     MissingData = namedtuple("MissingData", ["filepath", "entry_type"])
     InvalidData = namedtuple("InvalidData", ["filepath", "expected_filetype", "actual_filetype"])
 

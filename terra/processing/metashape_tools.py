@@ -1,13 +1,12 @@
 """Wrapper functions for Agisoft Metashape."""
+from __future__ import annotations
+
 import concurrent.futures
 import itertools
 import os
-import random
-import time
 import warnings
-from collections import deque, namedtuple
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import Metashape as ms
 import numpy as np
@@ -15,9 +14,9 @@ import pandas as pd
 import statictypes
 from tqdm import tqdm
 
-from terra import files, preprocessing
+from terra import files
 from terra.constants import CONSTANTS
-from terra.preprocessing import fiducials, georeferencing, masks
+from terra.preprocessing import fiducials, masks
 from terra.processing import inputs, processing_tools
 from terra.utilities import no_stdout
 
@@ -124,7 +123,7 @@ def save_document(doc: ms.Document) -> None:
 
 
 @statictypes.convert
-def get_unfinished_chunks(chunks: List[ms.Chunk], step: Step) -> List[ms.Chunk]:
+def get_unfinished_chunks(chunks: list[ms.Chunk], step: Step) -> list[ms.Chunk]:
     """
     Check whether a step is finished.
 
@@ -133,7 +132,8 @@ def get_unfinished_chunks(chunks: List[ms.Chunk], step: Step) -> List[ms.Chunk]:
 
     :returns: unfinished: The chunks whose step is unfinished.
     """
-    unfinished: List[ms.Chunk] = []
+    warnings.warn("Probably not needed (15/12/2020)", DeprecationWarning)
+    unfinished: list[ms.Chunk] = []
     for chunk in chunks:
         if step == Step.ALIGNMENT and any(["AlignCameras" not in meta for meta in chunk.meta.keys()]):
             unfinished.append(chunk)
@@ -165,7 +165,7 @@ def has_alignment(chunk: ms.Chunk) -> bool:
 
 
 @ statictypes.enforce
-def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str] = None) -> ms.Chunk:
+def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str] = None) -> ms.Chunk:
     """
     Create a new chunk in a document, add photos, and set appropriate parameters for them.
 
@@ -205,7 +205,7 @@ def new_chunk(doc: ms.Document, filenames: List[str], chunk_label: Optional[str]
 
         sensor.pixel_size = ms.Vector([CONSTANTS.scanning_resolution * 1e3] * 2)
         sensor.focal_length = dataframe.iloc[0]["focal_length"]
-        generate_fiducials(chunk, sensor)
+        import_fiducials(chunk, sensor)
 
         sensors[sensor.label] = sensor
 
@@ -267,45 +267,9 @@ def import_reference(chunk: ms.Chunk, filepath: str) -> None:
 
 
 @statictypes.enforce
-def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
+def import_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
     """
-    Align all cameras in a chunk.
-
-    :param chunk: The chunk whose images shall be aligned.
-    :param fixed_sensor: Whether to fix the sensors during the alignment.
-
-    :returns: aligned: Whether the alignment was successful or not.
-    """
-    fixed_sensors = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
-    if fixed_sensor:
-        for sensor in chunk.sensors:
-            sensor.fixed_calibration = True
-
-    with no_stdout():
-        chunk.matchPhotos(reference_preselection=True, filter_mask=True)
-        chunk.alignCameras()
-
-        # Check if no cameras were aligned (if all transforms are None)
-        if all([camera.transform is None for camera in chunk.cameras]):
-            if fixed_sensor:
-                for sensor in chunk.sensors:
-                    sensor.fixed_calibration = fixed_sensors[sensor]
-            return False
-
-        # Add extra tie points
-        chunk.triangulatePoints()
-        chunk.optimizeCameras()
-
-    if fixed_sensor:
-        for sensor in chunk.sensors:
-            sensor.fixed_calibration = fixed_sensors[sensor]
-    return True
-
-
-@statictypes.enforce
-def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
-    """
-    Generate fiducials for the specified sensor.
+    Generate fiducials for the specified sensor from a file with coordinates.
 
     :param chunk: The active chunk.
     :param sensor: The sensor to assign the fiducials to.
@@ -341,186 +305,43 @@ def generate_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
                 True)
 
 
-def build_dense_clouds(chunk: ms.Chunk, pairs: List[str], quality: Quality = Quality.HIGH,
-                       filtering: Filtering = Filtering.AGGRESSIVE, all_together: bool = False) -> list[str]:
+@statictypes.enforce
+def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
     """
-    Generate dense clouds for all stereo-pairs in a given chunk.
+    Align all cameras in a chunk.
 
-    :param chunk: The chunk to process.
-    :param pairs: A list of the stereo-pairs to process.
-    :param quality: The quality of the dense cloud.
-    :param filtering: The dense cloud filtering setting.
-    :param all_together: Whether to process every stereo-pair together.
+    :param chunk: The chunk whose images shall be aligned.
+    :param fixed_sensor: Whether to fix the sensors during the alignment.
+
+    :returns: aligned: Whether the alignment was successful or not.
     """
-    successful_pairs: list[str] = []
+    fixed_sensors = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
+    if fixed_sensor:
+        for sensor in chunk.sensors:
+            sensor.fixed_calibration = True
 
-    def generate_dense_cloud(cameras: List[ms.Camera], label) -> bool:
-        for camera in chunk.cameras:
-            # Set it as enabled if the camera group label fits with the stereo pair label
-            camera.enabled = camera in cameras
+    with no_stdout():
+        chunk.matchPhotos(reference_preselection=True, filter_mask=True)
+        chunk.alignCameras()
 
-        with no_stdout():
-            chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
-            try:
-                chunk.buildDenseCloud(point_confidence=True)
-            except Exception as exception:
-                if "Zero resolution" in str(exception):
-                    return False
-                raise exception
+        # Check if no cameras were aligned (if all transforms are None)
+        if all([camera.transform is None for camera in chunk.cameras]):
+            if fixed_sensor:
+                for sensor in chunk.sensors:
+                    sensor.fixed_calibration = fixed_sensors[sensor]
+            return False
 
-            chunk.dense_cloud.label = label
+        # Add extra tie points
+        chunk.triangulatePoints()
+        chunk.optimizeCameras()
 
-            # Remove all points with a low confidence
-            chunk.dense_cloud.setConfidenceFilter(0, CONSTANTS.dense_cloud_min_confidence - 1)
-            chunk.dense_cloud.removePoints(list(range(128)))
-            chunk.dense_cloud.resetFilters()
-        return True
-
-    if all_together:
-        print("Generating dense cloud from all stereo-pairs")
-        generate_dense_cloud(chunk.cameras, label="all_pairs")
-
-    else:
-        with tqdm(total=len(pairs), desc="Building dense clouds") as progress_bar:
-            for pair in pairs:
-                progress_bar.desc = f"Building dense cloud for {pair}"
-                progress_bar.update(n=0)  # Update the new text
-
-                cameras_to_process = [camera for camera in chunk.cameras if pair in camera.group.label]
-                successful = generate_dense_cloud(cameras_to_process, label=pair)
-                if successful:
-                    successful_pairs.append(pair)
-                # Unset the dense cloud as default to allow for more dense clouds to be constructed
-                chunk.dense_cloud = None
-
-                progress_bar.update()
-
-        # Reset the enabled flags
-        for camera in chunk.cameras:
-            camera.enabled = True
-
-    return successful_pairs
+    if fixed_sensor:
+        for sensor in chunk.sensors:
+            sensor.fixed_calibration = fixed_sensors[sensor]
+    return True
 
 
-@ statictypes.convert
-def old_build_dems(chunks: List[ms.Chunk], dataset: str) -> None:
-    """
-    Build DEMs using PDAL and GDAL.
-
-    :param chunks: The chunks to build DEMs for.
-    :param dataset: The name of the dataset.
-    """
-    warnings.warn("DEM function is outdated", Warning)
-    # Fill this with tuples: (dense_cloud_path, dem_path)
-    filepaths: List[Tuple[str, str]] = []
-
-    print("Exporting dense clouds")
-    for chunk in tqdm(chunks):
-        dense_cloud_path = os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], f"{chunk.label}_dense.ply")
-        dem_path = os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], f"{chunk.label}_DEM.tif")
-        filepaths.append((dense_cloud_path, dem_path))
-        # Export points from metashape
-        with no_stdout(disable=False):
-            chunk.exportPoints(dense_cloud_path, crs=chunk.crs)
-
-    print("Generating DEMs")
-    time.sleep(0.2)
-
-    progress_bar = tqdm(total=len(chunks))
-
-    def dem_thread_process(cloud_and_dem_paths: Tuple[str, str]) -> None:
-        """
-        Execute DEM generation in a thread.
-
-        :param cloud_and_dem_paths: A tuple of (dense_cloud_path, dem_path).
-        """
-        processing_tools.generate_dem(*cloud_and_dem_paths)
-        progress_bar.update()
-
-    # Generate DEMs for all point clouds in multiple threads.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=CONSTANTS.max_point_cloud_threads) as executor:
-        # Evaluate the generators into an empty deque
-        deque(executor.map(dem_thread_process, filepaths), maxlen=0)
-
-    # Import the results to Metashape
-    for i, chunk in enumerate(chunks):
-        with no_stdout():
-            chunk.importRaster(path=filepaths[i][1], crs=chunk.crs, raster_type=ms.DataSource.ElevationData)
-
-
-def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> list[str]:
-    """
-    Build orthomosaics for each chunk.
-
-    :param chunks: The chunks to build orthomosaics for.
-    :param resolution: The orthomosaic resolution in metres.
-    """
-    progress_bar = tqdm(total=len(pairs))
-
-    successful_pairs: list[str] = []
-
-    for pair in pairs:
-        progress_bar.desc = f"Generating orthomosaic for {pair}"
-        for camera in chunk.cameras:
-            camera.enabled = pair in camera.group.label
-
-        corresponding_dem_list = [dem for dem in chunk.elevations if pair == dem.label]
-
-        if len(corresponding_dem_list) == 0:
-            print(f"Pair {pair} has no DEM. Skipping orthomosaic generation")
-            progress_bar.update()
-            continue
-        chunk.elevation = corresponding_dem_list[0]
-
-        with no_stdout():
-            chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData, resolution=resolution)
-
-        chunk.orthomosaics[-1].label = pair
-        chunk.orthomosaic = None
-        successful_pairs.append(pair)
-        progress_bar.update()
-
-    chunk.elevation = None
-    progress_bar.close()
-
-    return successful_pairs
-
-
-def export_orthomosaics(chunk: ms.Chunk, pairs: list[str], directory: str, overwrite: bool = False):
-
-    os.makedirs(directory, exist_ok=True)
-
-    progress_bar = tqdm(total=len(pairs))
-
-    compression_type = ms.ImageCompression()
-    compression_type.tiff_compression = ms.ImageCompression.TiffCompressionJPEG
-    compression_type.jpeg_quality = 90
-
-    for pair in pairs:
-        progress_bar.desc = f"Exporting orthomosaic for {pair}"
-        output_filepath = os.path.join(directory, f"{pair}_orthomosaic.tif")
-
-        if not overwrite and os.path.isfile(output_filepath):
-            progress_bar.update()
-            continue
-
-        corresponding_ortho_list = [ortho for ortho in chunk.orthomosaics if ortho.label == pair]
-
-        if len(corresponding_ortho_list) == 0:
-            progress_bar.update()
-            continue
-        chunk.orthomosaic = corresponding_ortho_list[0]
-
-        with no_stdout():
-            chunk.exportRaster(
-                path=output_filepath,
-                source_data=ms.DataSource.OrthomosaicData,
-                image_compression=compression_type
-            )
-        progress_bar.update()
-
-
-def merge_chunks(doc: ms.Document, chunks: List[ms.Chunk], optimize: bool = True, remove_old: bool = False) -> ms.Chunk:
+def merge_chunks(doc: ms.Document, chunks: list[ms.Chunk], optimize: bool = True, remove_old: bool = False) -> ms.Chunk:
     """
     Merge Metashape chunks.
 
@@ -530,7 +351,6 @@ def merge_chunks(doc: ms.Document, chunks: List[ms.Chunk], optimize: bool = True
     :param remove_old: Whether to remove
 
     :returns: merged_chunk: The merged chunk.
-
     """
     chunk_positions = []
     for i, chunk in enumerate(doc.chunks):
@@ -624,7 +444,7 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
             merged_chunk.meta["dataset"] = dataset
             return merged_chunk
 
-    aligned_chunks: List[ms.Chunk] = []
+    aligned_chunks: list[ms.Chunk] = []
     progress_bar = tqdm(total=np.unique(image_meta["Base number"]).shape[0])
     # Loop through all stations (stereo-pairs) and align them if they don't already exist
     for station_number, station_meta in tqdm(image_meta.groupby("Base number")):
@@ -689,11 +509,11 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
 
 
 @ statictypes.enforce
-def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Marker, np.float64]:
+def get_rms_marker_reprojection_errors(markers: list[ms.Marker]) -> dict[ms.Marker, np.float64]:
     """
     Calculate the mean reprojection error for a marker, checked on all pinned projections.
     """
-    errors: Dict[ms.Marker, List[np.float64]] = {marker: []
+    errors: dict[ms.Marker, list[np.float64]] = {marker: []
                                                  for marker in markers if marker.type == ms.Marker.Type.Regular}
 
     for marker in errors:
@@ -702,7 +522,7 @@ def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Mark
                 continue
             errors[marker].append(get_marker_reprojection_error(camera, marker))
 
-    def rms(values: List[np.float64]):
+    def rms(values: list[np.float64]):
         return np.sqrt(np.nanmean(np.square(values))).astype(np.float64)
 
     mean_errors = {marker: rms(error_list) for marker, error_list in errors.items()}
@@ -711,7 +531,7 @@ def get_rms_marker_reprojection_errors(markers: List[ms.Marker]) -> Dict[ms.Mark
 
 
 @ statictypes.enforce
-def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
+def get_chunk_stereo_pairs(chunk: ms.Chunk) -> list[str]:
     """
     Get a list of stereo-pair group names.
 
@@ -720,7 +540,7 @@ def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
     :returns: pairs: A list of stereo-pair group names.
 
     """
-    pairs: List[str] = []
+    pairs: list[str] = []
     for group in chunk.camera_groups:
         pair = group.label.replace("_R", "").replace("_L", "")
 
@@ -731,9 +551,9 @@ def get_chunk_stereo_pairs(chunk: ms.Chunk) -> List[str]:
 
 
 @ statictypes.enforce
-def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
+def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> list[str]:
     """
-    List all stereo-pairs that have not yet finished a step.
+    list all stereo-pairs that have not yet finished a step.
 
     :param chunk: The chunk to analyse.
     :param step: The step to check for.
@@ -756,8 +576,143 @@ def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> List[str]:
     return unfinished_pairs
 
 
-def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
-               resolution: float = 5.0, interpolate_pixels: int = 0) -> Dict[str, str]:
+def optimize_cameras(chunk: ms.Chunk, fixed_sensors: bool = False) -> None:
+    """
+    Optimize the chunk camera alignment.
+
+    :param chunk: The chunk whose camera alignment should be optimized.
+    :param fixed_sensors: Whether to temporarily fix the sensor values on optimization.
+    """
+    # Parameters to either solve for or not to solve for in camera optimization
+    parameters = ["fit_f", "fit_cx", "fit_cy", "fit_b1", "fit_b2",
+                  "fit_k1", "fit_k2", "fit_k3", "fit_k4", "fit_p1", "fit_p2"]
+
+    if fixed_sensors:
+        # Get the initial values for the user calibration, fixed flag, and adjusted calibration.
+        # Get the NoneType if the calibration doesn't exist, otherwise copy the calibration.
+        old_initial_calibrations = {
+            sensor: sensor.user_calib if not sensor.user_calib else sensor.user_calib.copy() for sensor in chunk.sensors
+        }
+        old_fixed_flags = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
+        old_calibrations = {sensor: sensor.calibration.copy() for sensor in chunk.sensors}
+
+        # Set the adjusted calibration to be the user calibration (to use as fixed) and then fix the calibration.
+        for sensor in chunk.sensors:
+            sensor.user_calib = old_calibrations[sensor]
+            sensor.fixed_calibration = True
+
+        # Optimize cameras with all optimization parameters turned off.
+        with no_stdout():
+            chunk.optimizeCameras(**{key: False for key in parameters})
+
+        # Return the fixed flags and the user calibration to their initial values.
+        for sensor in chunk.sensors:
+            sensor.fixed_calibration = old_fixed_flags[sensor]
+            sensor.user_calib = old_initial_calibrations[sensor]
+
+    # If sensors should not be fixed.
+    else:
+        # Optimize cameras with all parameters turned on.
+        with no_stdout():
+            chunk.optimizeCameras(**{key: True for key in parameters})
+
+
+def remove_bad_markers(chunk, marker_error_threshold: float = 4.0):
+    """
+    Remove every marker in the chunk that has is above the reprojection threshold.
+
+    If an ICP tie point is too high, all of its family members will be removed as well.
+
+    :param chunk: The chunk to analyse.
+    :param marker_error_threshold: The marker reprojection error threshold to accept.
+    """
+    # Get the rms reprojection error for each marker
+    errors = get_rms_marker_reprojection_errors(chunk.markers)
+    # Find the markers whose values are too high
+    too_high = [marker for marker in errors if errors[marker] > marker_error_threshold]
+
+    # Loop through each marker and check if it belongs to a tie point family
+    for marker in too_high:
+        if "tie_" in marker.label:
+            # If it is, remove all of its friends
+            tie_family = marker.label[:marker.label.index("_num_")]
+
+            # Find the friends with the same marker label family
+            for marker2 in errors:
+                if marker2 in too_high:
+                    continue
+                if tie_family in marker2.label:
+                    too_high.append(marker2)
+
+    for marker in too_high:
+        chunk.remove(marker)
+
+
+def build_dense_clouds(chunk: ms.Chunk, pairs: list[str], quality: Quality = Quality.HIGH,
+                       filtering: Filtering = Filtering.AGGRESSIVE, all_together: bool = False) -> list[str]:
+    """
+    Generate dense clouds for all stereo-pairs in a given chunk.
+
+    :param chunk: The chunk to process.
+    :param pairs: A list of the stereo-pairs to process.
+    :param quality: The quality of the dense cloud.
+    :param filtering: The dense cloud filtering setting.
+    :param all_together: Whether to process every stereo-pair together.
+    :returns: A list of stereo-pairs where the dense cloud generation succeeded.
+    """
+    successful_pairs: list[str] = []
+
+    def generate_dense_cloud(cameras: list[ms.Camera], label) -> bool:
+        for camera in chunk.cameras:
+            # Set it as enabled if the camera group label fits with the stereo pair label
+            camera.enabled = camera in cameras
+
+        with no_stdout():
+            chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
+            try:
+                chunk.buildDenseCloud(point_confidence=True)
+            except Exception as exception:
+                if "Zero resolution" in str(exception):
+                    return False
+                raise exception
+
+            chunk.dense_cloud.label = label
+
+            # Remove all points with a low confidence
+            chunk.dense_cloud.setConfidenceFilter(0, CONSTANTS.dense_cloud_min_confidence - 1)
+            chunk.dense_cloud.removePoints(list(range(128)))
+            chunk.dense_cloud.resetFilters()
+        return True
+
+    if all_together:
+        print("Generating dense cloud from all stereo-pairs")
+        generate_dense_cloud(chunk.cameras, label="all_pairs")
+        successful_pairs = pairs
+
+    else:
+        with tqdm(total=len(pairs), desc="Building dense clouds") as progress_bar:
+            for pair in pairs:
+                progress_bar.desc = f"Building dense cloud for {pair}"
+                progress_bar.update(n=0)  # Update the new text
+
+                cameras_to_process = [camera for camera in chunk.cameras if pair in camera.group.label]
+                successful = generate_dense_cloud(cameras_to_process, label=pair)
+                if successful:
+                    successful_pairs.append(pair)
+                # Unset the dense cloud as default to allow for more dense clouds to be constructed
+                chunk.dense_cloud = None
+
+                progress_bar.update()
+
+        # Reset the enabled flags
+        for camera in chunk.cameras:
+            camera.enabled = True
+
+    return successful_pairs
+
+
+def build_dems(chunk: ms.Chunk, pairs: list[str], redo: bool = False,
+               resolution: float = 5.0, interpolate_pixels: int = 0) -> dict[str, str]:
     """
     Build DEMs for each stereo-pair.
 
@@ -771,7 +726,7 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     """
     assert chunk.meta["dataset"] is not None
 
-    filepaths: Dict[str, str] = {}
+    filepaths: dict[str, str] = {}
 
     dense_clouds = [cloud for cloud in chunk.dense_clouds if cloud.label in pairs]
 
@@ -793,7 +748,7 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
 
     progress_bar = tqdm(total=len(filepaths), desc="Generating DEMs")
 
-    def build_dem(pair_and_filepath: Tuple[str, str]) -> Tuple[str, str]:
+    def build_dem(pair_and_filepath: tuple[str, str]) -> tuple[str, str]:
         """
         Generate a DEM from a point cloud.
 
@@ -827,7 +782,102 @@ def build_dems(chunk: ms.Chunk, pairs: List[str], redo: bool = False,
     return dem_filepaths
 
 
-def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float = 13.0,
+def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> list[str]:
+    """
+    Build orthomosaics for each chunk.
+
+    :param chunks: The active chunk.
+    :param pairs: The stereo-pairs to build orthomosaics for.
+    :param resolution: The orthomosaic resolution in metres.
+    :returns: A list of stereo-pairs where the orthomosaic generation succeeded.
+    """
+    # Make a list of all of the stereo-pairs that successfully got orthomosaics
+    successful_pairs: list[str] = []
+
+    progress_bar = tqdm(total=len(pairs))
+    for pair in pairs:
+        progress_bar.desc = f"Generating orthomosaic for {pair}"
+        # Set all cameras of the stereo-pair to be enabled and disable all others.
+        for camera in chunk.cameras:
+            camera.enabled = pair in camera.group.label
+
+        # Match a DEM with the stereo-pair name. Has a len() of 1 if it exists or 0 if it doesn't.
+        corresponding_dem_list = [dem for dem in chunk.elevations if pair == dem.label]
+
+        # Skip if the stereo-pair has no corresponding DEM
+        if len(corresponding_dem_list) == 0:
+            print(f"Pair {pair} has no DEM. Skipping orthomosaic generation")
+            progress_bar.update()
+            continue
+        # Set the "default" DEM to the one corresponding to the stereo-pair
+        chunk.elevation = corresponding_dem_list[0]
+
+        with no_stdout():
+            chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData, resolution=resolution)
+
+        # Set the label to equal the stereo-pair label
+        chunk.orthomosaics[-1].label = pair
+        # Unset the "default" orthomosaic
+        chunk.orthomosaic = None
+
+        successful_pairs.append(pair)
+        progress_bar.update()
+
+    # Unset the "default" DEM
+    chunk.elevation = None
+    progress_bar.close()
+
+    return successful_pairs
+
+
+def export_orthomosaics(chunk: ms.Chunk, pairs: list[str], directory: str, overwrite: bool = False):
+    """
+    Export all orthomosaics of the given pairs that exist.
+
+    Orthomosaics that do not exist are silently skipped.
+
+    :param chunk: The current Metashape chunk.
+    :param pairs: The stereo-pairs to export the orthomosaics from.
+    :param directory: The output directory to export the orthomosaics in.
+    :param overwrite: Overwrite already existing files flag.
+    """
+    os.makedirs(directory, exist_ok=True)
+
+    # Set the compression type to be JPEG quality 90% for TIFFs
+    compression_type = ms.ImageCompression()
+    compression_type.tiff_compression = ms.ImageCompression.TiffCompressionJPEG
+    compression_type.jpeg_quality = 90
+
+    progress_bar = tqdm(total=len(pairs))
+    for pair in pairs:
+        progress_bar.desc = f"Exporting orthomosaic for {pair}"
+        output_filepath = os.path.join(directory, f"{pair}_orthomosaic.tif")
+
+        # Skip if it shouldn't overwrite an already existing orthomosaic
+        if not overwrite and os.path.isfile(output_filepath):
+            progress_bar.update()
+            continue
+
+        # A list of matched orthomosaic(s). It always has a len() of 1 or 0 (meaning it exists or it doesn't)
+        corresponding_ortho_list = [ortho for ortho in chunk.orthomosaics if ortho.label == pair]
+
+        # Skip if no orthomosaic exists of that pair
+        if len(corresponding_ortho_list) == 0:
+            progress_bar.update()
+            continue
+        # Set the "default" orthomosaic to be the one corresponding to the stereo-pair
+        chunk.orthomosaic = corresponding_ortho_list[0]
+
+        with no_stdout():
+            chunk.exportRaster(
+                path=output_filepath,
+                source_data=ms.DataSource.OrthomosaicData,
+                image_compression=compression_type
+            )
+        progress_bar.update()
+
+
+def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float = 13.0,
                          tie_group_radius: float = 30.0, marker_pixel_accuracy=4.0):
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.
@@ -851,7 +901,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
     # Start a progress bar for the DEM coaligning
     progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
 
-    def coalign_dems(path_combination: Tuple[str, str]):
+    def coalign_dems(path_combination: tuple[str, str]):
         """Coalign two DEMs in one thread."""
         path_1, path_2 = path_combination
         result = processing_tools.coalign_dems(reference_path=path_1, aligned_path=path_2)
@@ -949,7 +999,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
             return True
 
         @ statictypes.enforce
-        def find_good_cameras(pair: str, positions: pd.DataFrame) -> List[ms.Camera]:
+        def find_good_cameras(pair: str, positions: pd.DataFrame) -> list[ms.Camera]:
             """
             Find a camera that can "see" all the given positions.
 
@@ -1024,75 +1074,3 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: List[str], max_fitness: float =
         progress_bar.update()
 
     progress_bar.close()
-
-
-def optimize_cameras(chunk: ms.Chunk, fixed_sensors: bool = False) -> None:
-    """
-    Optimize the chunk camera alignment.
-
-    :param chunk: The chunk whose camera alignment should be optimized.
-    :param fixed_sensors: Whether to temporarily fix the sensor values on optimization.
-    """
-    # Parameters to either solve for or not to solve for in camera optimization
-    parameters = ["fit_f", "fit_cx", "fit_cy", "fit_b1", "fit_b2",
-                  "fit_k1", "fit_k2", "fit_k3", "fit_k4", "fit_p1", "fit_p2"]
-
-    if fixed_sensors:
-        # Get the initial values for the user calibration, fixed flag, and adjusted calibration.
-        # Get the NoneType if the calibration doesn't exist, otherwise copy the calibration.
-        old_initial_calibrations = {
-            sensor: sensor.user_calib if not sensor.user_calib else sensor.user_calib.copy() for sensor in chunk.sensors
-        }
-        old_fixed_flags = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
-        old_calibrations = {sensor: sensor.calibration.copy() for sensor in chunk.sensors}
-
-        # Set the adjusted calibration to be the user calibration (to use as fixed) and then fix the calibration.
-        for sensor in chunk.sensors:
-            sensor.user_calib = old_calibrations[sensor]
-            sensor.fixed_calibration = True
-
-        # Optimize cameras with all optimization parameters turned off.
-        with no_stdout():
-            chunk.optimizeCameras(**{key: False for key in parameters})
-
-        # Return the fixed flags and the user calibration to their initial values.
-        for sensor in chunk.sensors:
-            sensor.fixed_calibration = old_fixed_flags[sensor]
-            sensor.user_calib = old_initial_calibrations[sensor]
-
-    # If sensors should not be fixed.
-    else:
-        # Optimize cameras with all parameters turned on.
-        with no_stdout():
-            chunk.optimizeCameras(**{key: True for key in parameters})
-
-
-def remove_bad_markers(chunk, marker_error_threshold: float = 4.0):
-    """
-    Remove every marker in the chunk that has is above the reprojection threshold.
-
-    If an ICP tie point is too high, all of its family members will be removed as well.
-
-    :param chunk: The chunk to analyse.
-    :param marker_error_threshold: The marker reprojection error threshold to accept.
-    """
-    # Get the rms reprojection error for each marker
-    errors = get_rms_marker_reprojection_errors(chunk.markers)
-    # Find the markers whose values are too high
-    too_high = [marker for marker in errors if errors[marker] > marker_error_threshold]
-
-    # Loop through each marker and check if it belongs to a tie point family
-    for marker in too_high:
-        if "tie_" in marker.label:
-            # If it is, remove all of its friends
-            tie_family = marker.label[:marker.label.index("_num_")]
-
-            # Find the friends with the same marker label family
-            for marker2 in errors:
-                if marker2 in too_high:
-                    continue
-                if tie_family in marker2.label:
-                    too_high.append(marker2)
-
-    for marker in too_high:
-        chunk.remove(marker)

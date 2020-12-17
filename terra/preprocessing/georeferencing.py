@@ -28,12 +28,10 @@ def get_slope_and_aspect(redo: bool = False) -> tuple[rio.DatasetReader, rio.Dat
     """
     Generate and/or load slope and aspect maps from the base DEM.
 
-    param: redo: If the maps should be redone even though they exist.
+    :param redo: If the maps should be redone even though they exist.
 
-    return: slope, aspect: Rasterio dataset readers for each respective dataset.
-
+    :returns: Rasterio dataset readers for each respective dataset.
     """
-
     # Generate a slope and aspect map using GDAL
     filepaths = []
     for name in ["slope", "aspect"]:
@@ -57,11 +55,11 @@ def correct_metadata_coordinates(old_camera_locations: pd.DataFrame,
     """
     Use a base DEM to correct systematic spatial offsets in the location data.
 
-    param: old_camera_locations: The initial camera_locations DataFrame.
-    param: nocorr: Whether to only calculate the differences but not correct for them (for visualisation).
-    param: gridsize: The width/height of the offset fields to generate (250 ~= 1 km / px)
+    :param old_camera_locations: The initial camera_locations DataFrame.
+    :param nocorr: Whether to only calculate the differences but not correct for them (for visualisation).
+    :param gridsize: The width/height of the offset fields to generate (250 ~= 1 km / px)
 
-    return: corrs, camera_locations: The correction fields and the corrected camera locations.
+    :returns: The correction fields and the corrected camera locations.
     """
     # Load the 1935 glacier outlines to find which cameras were taken on a glacier.
     outlines_1935 = gpd.read_file(files.INPUT_FILES["outlines_1935"])
@@ -125,10 +123,10 @@ def correct_metadata_coordinates(old_camera_locations: pd.DataFrame,
         """
         Find the index of a cell that shares the most resemblance to a given value.
 
-        param: arr: The 1D array to query.
-        param: value: The value to find the corresponding index to in 'arr'
+        :param arr: The 1D array to query.
+        :param value: The value to find the corresponding index to in 'arr'
 
-        return: index: The closest index in 'arr'
+        :returns: The closest index in 'arr'
         """
         return np.abs(arr - value).argmin()
 
@@ -137,12 +135,12 @@ def correct_metadata_coordinates(old_camera_locations: pd.DataFrame,
         """
         Correct a 3D coordinate using coordinate correction fields.
 
-        param: x_coord: The x-coordinate (easting).
-        param: y_coord: The y-coordinate (northing).
-        param: z_coord: The z-coordinate (altitude).
-        param: x_correction_array: The x correction field.
-        param: y_correction_array: The y correction field.
-        param: z_correction_array: The z correction field.
+        :param x_coord: The x-coordinate (easting).
+        :param y_coord: The y-coordinate (northing).
+        :param z_coord: The z-coordinate (altitude).
+        :param x_correction_array: The x correction field.
+        :param y_correction_array: The y correction field.
+        :param z_correction_array: The z correction field.
 
         return: [new_x_coord, new_y_coord, new_z_coord]
         """
@@ -194,8 +192,12 @@ def correct_metadata_coordinates(old_camera_locations: pd.DataFrame,
     return corrs, corrected_camera_locations
 
 
-def generate_corrected_metadata():
+def generate_corrected_metadata() -> pd.DataFrame:
+    """
+    Load and correct the image location metadata.
 
+    :returns: The metadata file with corrected camera locations
+    """
     print("Correcting georeferencing information.")
     image_meta = preprocessing.image_meta.read_metadata()
 

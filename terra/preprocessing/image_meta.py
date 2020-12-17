@@ -218,3 +218,5 @@ def get_filenames_for_instrument(instrument: str) -> np.ndarray:
 
 if __name__ == "__main__":
     meta = read_metadata()
+
+    print(meta.groupby("Base number").count())
