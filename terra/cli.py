@@ -42,7 +42,8 @@ def parse_args():
     # Subcommands for the overview module
     choices = {
         "show-metadata": "Display properties about the images' metadata.",
-        "capture-dates": "Plot the dates for when photographs were captured"
+        "capture-dates": "Plot the dates for when photographs were captured",
+        "process-log": "Show the processing progress log"
     }
     overview_parser = commands.add_parser(
         "overview", formatter_class=argparse.RawTextHelpFormatter, help="Dataset overview statistics.")
@@ -119,6 +120,8 @@ def overview_commands(args):
         print(meta_file.dtypes)
     elif args.action == "capture-dates":
         preprocessing.overview.get_capture_date_distribution()
+    elif args.action == "process-log":
+        processing.processing_tools.show_processing_log()
 
 
 def preprocessing_commands(args):

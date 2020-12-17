@@ -409,3 +409,30 @@ def transform_points(points: pd.DataFrame, composed_transform: str, inverse: boo
     transformed_points = pd.read_csv(tempfiles["transformed_points"])
 
     return transformed_points
+
+
+def show_processing_log():
+    """Show a formatted version of the processing log if one exists."""
+    log_path = os.path.join(inputs.TEMP_DIRECTORY, "progress.log")
+    if not os.path.isfile(log_path):
+        raise FileNotFoundError(f"Log not found: {log_path}")
+
+    log = pd.read_csv(log_path, names=["date", "dataset", "event"])
+    log.index = pd.to_datetime(log["date"], format="%Z %Y/%m/%d %H:%M:%S")
+
+    # Sort all dataset processing runs into separate numberings
+    # A new run is assumed to always start with the event "Processing started"
+    processing_nr = 0
+    for i, row in log.iterrows():
+        if row["event"] == "Processing started":
+            processing_nr += 1
+
+        log.loc[i, "processing_nr"] = processing_nr
+
+    for processing_nr, processing_log in log.groupby("processing_nr"):
+        processing_time = processing_log.index.max() - processing_log.index.min()
+
+        print(processing_log.iloc[0]["dataset"])
+        for date, row in processing_log.iterrows():
+            print(f"\t{date}\t{row['event']}")
+        print(f"Duration: {processing_time}")
