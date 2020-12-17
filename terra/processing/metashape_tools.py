@@ -877,7 +877,7 @@ def export_orthomosaics(chunk: ms.Chunk, pairs: list[str], directory: str, overw
         progress_bar.update()
 
 
-def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float = 13.0,
+def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float = 20.0,
                          tie_group_radius: float = 30.0, marker_pixel_accuracy=4.0):
     """
     Use DEM ICP coaligning to align combinations of stereo-pairs.

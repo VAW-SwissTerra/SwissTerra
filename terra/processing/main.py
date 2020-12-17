@@ -73,6 +73,8 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
                 os.remove(os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], filename))
 
         log(dataset, "Coalignment successful")
+    else:
+        log(dataset, "Coalignment already exists")
 
     # Generate dense clouds for all stereo-pairs that do not yet have one.
     missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DENSE_CLOUD)
