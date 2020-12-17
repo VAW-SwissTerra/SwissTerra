@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 import rasterio as rio
 import scipy.interpolate
-import statictypes
 
 from terra import files, preprocessing
 from terra.constants import CONSTANTS

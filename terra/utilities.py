@@ -9,7 +9,6 @@ import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
-import statictypes
 
 libc = ctypes.CDLL(None)
 c_stdout = ctypes.c_void_p.in_dll(libc, 'stdout')
@@ -66,7 +65,6 @@ def no_stdout(stream=None, disable=False):
 class ConstantType:
     """Generic readonly document constants class."""
 
-    @statictypes.enforce
     def __getitem__(self, key: str) -> Any:
         """
         Get an item like a dict.
@@ -92,7 +90,6 @@ class ConstantType:
         self.raise_readonly_error(key, value)
 
 
-@statictypes.enforce
 def notify(message: str) -> None:
     """
     Send a notification to the current user.

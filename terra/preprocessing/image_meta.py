@@ -2,7 +2,6 @@ import os
 
 import numpy as np
 import pandas as pd
-import statictypes
 from tqdm import tqdm
 
 from terra import files
@@ -190,7 +189,6 @@ def get_matching_candidates(angle_threshold: float = 45.0, distance_threshold: f
     return pairs
 
 
-@statictypes.enforce
 def get_cameras_from_bounds(left: float, right: float, top: float, bottom: float) -> np.ndarray:
     """
     Extract every camera that can be found in the specified bounds.

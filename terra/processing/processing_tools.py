@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import rasterio as rio
 import scipy.ndimage
-import statictypes
 
 from terra import files
 from terra.constants import CONSTANTS
@@ -24,7 +23,6 @@ CACHE_FILES = {
 }
 
 
-@statictypes.enforce
 def generate_dem(point_cloud_path: str, output_dem_path: str,
                  resolution: float = 1.0, interpolate_pixels: int = 10) -> str:
     """
@@ -83,7 +81,6 @@ def generate_dem(point_cloud_path: str, output_dem_path: str,
     return output_dem_path
 
 
-# @statictypes.convert
 def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
                       parameters: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """

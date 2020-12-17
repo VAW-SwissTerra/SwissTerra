@@ -7,7 +7,6 @@ from collections import namedtuple
 from typing import Any, Dict, Generator, List, Union
 
 import magic
-import statictypes
 import toml
 
 # Set the default input root directory
@@ -66,7 +65,6 @@ def clear_cache() -> None:
     shutil.rmtree(TEMP_DIRECTORY)
 
 
-@ statictypes.enforce
 def check_filetype(estimated_filetype: str, allowed_types: Union[str, List[str]]) -> bool:
     """
     Check if a file has an expected filetype.
@@ -199,7 +197,6 @@ def list_image_meta_paths() -> Generator[str, None, None]:
     return list_input_directory(INPUT_DIRECTORIES["image_meta_dir"])
 
 
-@statictypes.enforce
 def read_dataset_meta(dataset: str) -> Dict[str, Any]:
     """
     Read the metadata toml file of a dataset.
