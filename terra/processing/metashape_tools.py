@@ -17,7 +17,7 @@ from terra import files
 from terra.constants import CONSTANTS
 from terra.preprocessing import fiducials, masks
 from terra.processing import inputs, processing_tools
-from terra.utilities import no_stdout
+from terra.utilities import is_gpu_available, no_stdout
 
 CACHE_FILES = {}
 
@@ -60,7 +60,7 @@ def is_document(dataset: str) -> bool:
 
     :param dataset: The name of the dataset.
 
-    :returns: exists: Whether the document exists or not.
+    :returns: Whether the document exists or not.
     """
     cache_file_key = f"{dataset}_metashape_project"
     if cache_file_key not in CACHE_FILES:
@@ -74,7 +74,7 @@ def new_document(dataset: str) -> ms.Document:
 
     :param dataset: The dataset name.
 
-    :returns: doc: The newly created Metashape document.
+    :returns: The newly created Metashape document.
     """
     # Make the temporary directory (also makes the project root directory)
     os.makedirs(inputs.CACHE_FILES[f"{dataset}_temp_dir"], exist_ok=True)
@@ -84,7 +84,7 @@ def new_document(dataset: str) -> ms.Document:
         doc.save(CACHE_FILES[f"{dataset}_metashape_project"])
 
     if doc.read_only:
-        raise AssertionError("New document is in read-only mode. Is it open?")
+        raise AssertionError("New document is in read-only mode. Is it open in another process?")
 
     doc.meta["dataset"] = dataset
 
@@ -97,14 +97,14 @@ def load_document(dataset: str) -> ms.Document:
 
     :param dataset: The dataset name.
 
-    :returns: doc: The newly created Metashape document.
+    :returns: The newly created Metashape document.
     """
     with no_stdout():
         doc = ms.Document()
         doc.open(CACHE_FILES[f"{dataset}_metashape_project"])
 
     if doc.read_only:
-        raise AssertionError("The loaded document is in read-only mode. Is it open?\
+        raise AssertionError("The loaded document is in read-only mode. Is it open in another process?\
                 Remove lock file if not using 'terra cache remove-locks'.")
 
     doc.meta["dataset"] = dataset
@@ -118,44 +118,83 @@ def save_document(doc: ms.Document) -> None:
         doc.save()
 
 
-def get_unfinished_chunks(chunks: list[ms.Chunk], step: Step) -> list[ms.Chunk]:
-    """
-    Check whether a step is finished.
-
-    :param chunks: The chunks to check.
-    :param step: The step to check.
-
-    :returns: unfinished: The chunks whose step is unfinished.
-    """
-    warnings.warn("Probably not needed (15/12/2020)", DeprecationWarning)
-    unfinished: list[ms.Chunk] = []
-    for chunk in chunks:
-        if step == Step.ALIGNMENT and any(["AlignCameras" not in meta for meta in chunk.meta.keys()]):
-            unfinished.append(chunk)
-
-        elif step == Step.DENSE_CLOUD and chunk.dense_cloud is None:
-            unfinished.append(chunk)
-
-        elif step == Step.DEM and chunk.elevation is None:
-            unfinished.append(chunk)
-
-        elif step == Step.ORTHOMOSAIC and chunk.orthomosaic is None:
-            unfinished.append(chunk)
-
-    # Check whether all chunks' step is valid
-    return unfinished
-
-
 def has_alignment(chunk: ms.Chunk) -> bool:
     """
     Check whether some or all cameras in a chunk are aligned.
 
     :param chunk: The chunk to check.
 
-    :returns: any_alignment: Whether at least one camera is aligned.
+    :returns: Whether at least one camera is aligned.
     """
     any_alignment = any([camera.transform is not None for camera in chunk.cameras])
     return any_alignment
+
+
+def import_reference(chunk: ms.Chunk, filepath: str) -> None:
+    """
+    Import camera location and orientation information into Metashape.
+
+    The camera location CRS is assumed to be the same as the chunk CRS.
+    The camera orientation format is assumed to be in Yaw, Pitch, Roll
+
+    :param chunk: The chunk to add the reference to.
+    :param filepath: The filepath of the reference csv.
+    """
+    # Use Omega Phi Kappa as the rotation system (yaw pitch roll has some bug that makes it incorrect)
+    chunk.euler_angles = ms.EulerAnglesOPK
+
+    # Load the reference position and rotation information.
+    reference_data = pd.read_csv(filepath, index_col="label").astype(float)
+    reference_data.index = reference_data.index.str.replace(".tif", "")
+
+    for camera in chunk.cameras:
+        cam_data = reference_data.loc[camera.label]
+        camera.reference.location = cam_data[["easting", "northing", "altitude"]].values
+
+        # Convert from yaw, pitch roll to Omega Phi Kappa (again due to the YPR bug)
+        camera.reference.rotation = ms.Utils.mat2opk(ms.Utils.ypr2mat(
+            ms.Vector(cam_data[["yaw", "pitch", "roll"]].values)))
+
+
+def import_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
+    """
+    Generate fiducials for the specified sensor from a file with coordinates.
+
+    :param chunk: The active chunk.
+    :param sensor: The sensor (instrument) to assign the fiducials to.
+    """
+    # Find which instrument the dataset belongs to using its name, e.g. Wild1_1924 -> Wild1
+    instrument = chunk.meta["dataset"].split("_")[0]
+    fiducial_marks = pd.read_csv(
+        os.path.join(fiducials.CACHE_FILES["fiducial_location_dir"], f"fiducials_{instrument}.csv"),
+        index_col=0)
+
+    # Add one fiducial mark for each corner.
+    new_fiducials = {}
+    for corner in ["top", "right", "bottom", "left"]:
+        fiducial = chunk.addMarker()
+        fiducial.type = ms.Marker.Type.Fiducial
+        fiducial.label = f"{sensor.label}_{corner}"
+
+        fiducial.sensor = sensor
+
+        # Take the x/y mm coordinate of the first matching camera
+        x_mm, y_mm = fiducial_marks.loc[chunk.cameras[0].label + ".tif", [f"{corner}_x_mm", f"{corner}_y_mm"]]
+        fiducial.reference.location = ms.Vector([x_mm, y_mm, 0])
+
+        new_fiducials[corner] = fiducial
+
+    # Add the corresponding fiducial projections of each corner to the cameras.
+    for camera in chunk.cameras:
+        projection_row = fiducial_marks.loc[camera.label + ".tif"]
+
+        for corner, fiducial in new_fiducials.items():
+            fiducial.projections[camera] = ms.Marker.Projection(
+                ms.Vector([
+                    projection_row[f"{corner}_x"],
+                    projection_row[f"{corner}_y"]
+                ]),
+                True)
 
 
 def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str] = None) -> ms.Chunk:
@@ -176,22 +215,23 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
         chunk.label = chunk_label
 
     chunk.crs = ms.CoordinateSystem(CONSTANTS.crs_epsg)
-    chunk.camera_location_accuracy = ms.Vector([2] * 3)
-    chunk.camera_rotation_accuracy = ms.Vector([1] * 3)
+    chunk.camera_location_accuracy = ms.Vector([CONSTANTS.position_accuracy] * 3)
+    chunk.camera_rotation_accuracy = ms.Vector([CONSTANTS.rotation_accuracy] * 3)
 
+    # Get the full filepaths for the images that should be used.
+    # TODO: Maybe replace the filenames argument with filename derivation from the image_meta below?
     filepaths = [os.path.join(files.INPUT_DIRECTORIES["image_dir"], filename) for filename in filenames]
 
+    # Read the metadata for each image in the dataset
     image_meta = inputs.get_dataset_metadata(doc.meta["dataset"])
-    #all_image_meta = georeferencing.generate_corrected_metadata()
-    #image_meta = all_image_meta[all_image_meta["Image file"].isin(filenames)]
 
     with no_stdout():
-
         chunk.addPhotos(filepaths)
 
+    # Add each instrument in the dataset as a different sensor
+    # TODO: Maybe remove this as instruments are now always processed separately?
     sensors = {}
     for instrument, dataframe in image_meta.groupby("Instrument"):
-
         sensor = chunk.addSensor()
         sensor.film_camera = True
         sensor.label = instrument
@@ -203,21 +243,25 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
         sensors[sensor.label] = sensor
 
     for camera in chunk.cameras:
-        sensor_label = image_meta[image_meta["Image file"].str.replace(
-            ".tif", "") == camera.label].iloc[0]["Instrument"]
-        camera.sensor = sensors[sensor_label]
+        sensor_name = image_meta[image_meta["Image file"].str.replace(".tif", "") == camera.label].iloc[0]["Instrument"]
+        camera.sensor = sensors[sensor_name]
 
-    for sensor in sensors.values():
-        sensor.calibrateFiducials(resolution=CONSTANTS.scanning_resolution * 1e3)
+    # This should not be done anymore as the import_fiducials gives the right mm size data now
+    # for sensor in sensors.values():
+    #    sensor.calibrateFiducials(resolution=CONSTANTS.scanning_resolution * 1e3)
 
+    # Import position and rotation data
     import_reference(chunk, inputs.CACHE_FILES[f"{doc.meta['dataset']}_camera_orientations"])
 
-    groups = {}
+    # Separate all stereo-pairs and their left/right positions into unique groups
+    groups: dict[str, ms.CameraGroup] = {}
     for camera in chunk.cameras:
+        # Find the row corresponding to the camera
         camera_row = image_meta[image_meta["Image file"].str.replace(".tif", "") == camera.label].squeeze()
-        assert isinstance(camera_row, pd.Series), "Camera row has incorrect filetype"
+        # Specify what group label it should have
         group_label = f"station_{str(camera_row['Base number'])}_{camera_row['Position']}"
 
+        # Create the group if it doesn't yet exist
         if group_label not in groups:
             group = chunk.addCameraGroup()
             group.label = group_label
@@ -235,67 +279,6 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
     return chunk
 
 
-def import_reference(chunk: ms.Chunk, filepath: str) -> None:
-    """
-    Import camera location and orientation information into Metashape.
-
-    The camera location CRS is assumed to be the same as the chunk CRS.
-    The camera orientation format is assumed to be in Yaw, Pitch, Roll
-
-    :param chunk: The chunk to add the reference to.
-    :param filepath: The filepath of the reference csv.
-    """
-    chunk.euler_angles = ms.EulerAnglesOPK
-
-    reference_data = pd.read_csv(filepath, index_col="label").astype(float)
-    reference_data.index = reference_data.index.str.replace(".tif", "")
-
-    for camera in chunk.cameras:
-        cam_data = reference_data.loc[camera.label]
-        camera.reference.location = cam_data[["easting", "northing", "altitude"]].values
-
-        camera.reference.rotation = ms.Utils.mat2opk(ms.Utils.ypr2mat(
-            ms.Vector(cam_data[["yaw", "pitch", "roll"]].values)))
-
-
-def import_fiducials(chunk: ms.Chunk, sensor: ms.Sensor) -> None:
-    """
-    Generate fiducials for the specified sensor from a file with coordinates.
-
-    :param chunk: The active chunk.
-    :param sensor: The sensor to assign the fiducials to.
-    """
-    instrument = chunk.meta["dataset"].split("_")[0]
-    fiducial_marks = pd.read_csv(
-        os.path.join(fiducials.CACHE_FILES["fiducial_location_dir"], f"fiducials_{instrument}.csv"),
-        index_col=0)
-
-    new_fiducials = {}
-    for corner in ["top", "right", "bottom", "left"]:
-        fiducial = chunk.addMarker()
-        fiducial.type = ms.Marker.Type.Fiducial
-        fiducial.label = f"{sensor.label}_{corner}"
-
-        fiducial.sensor = sensor
-
-        # Take the x/y mm coordinate of the first matching camera
-        x_mm, y_mm = fiducial_marks.loc[chunk.cameras[0].label + ".tif", [f"{corner}_x_mm", f"{corner}_y_mm"]]
-        fiducial.reference.location = ms.Vector([x_mm, y_mm, 0])
-
-        new_fiducials[corner] = fiducial
-
-    for camera in chunk.cameras:
-        projection_row = fiducial_marks.loc[camera.label + ".tif"]
-
-        for corner, fiducial in new_fiducials.items():
-            fiducial.projections[camera] = ms.Marker.Projection(
-                ms.Vector([
-                    projection_row[f"{corner}_x"],
-                    projection_row[f"{corner}_y"]
-                ]),
-                True)
-
-
 def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
     """
     Align all cameras in a chunk.
@@ -303,8 +286,9 @@ def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
     :param chunk: The chunk whose images shall be aligned.
     :param fixed_sensor: Whether to fix the sensors during the alignment.
 
-    :returns: aligned: Whether the alignment was successful or not.
+    :returns: Whether the alignment was successful or not.
     """
+    # If it should be a fixed sensor alignment, save which sensors were fixed to begin with (and restore that later)
     fixed_sensors = {sensor: sensor.fixed_calibration for sensor in chunk.sensors}
     if fixed_sensor:
         for sensor in chunk.sensors:
@@ -321,8 +305,8 @@ def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
                     sensor.fixed_calibration = fixed_sensors[sensor]
             return False
 
-        # Add extra tie points
-        chunk.triangulatePoints()
+        # Add all tie points below a maximum reprojection error of 10 pixels
+        chunk.triangulatePoints(max_error=10)
         chunk.optimizeCameras()
 
     if fixed_sensor:
@@ -338,10 +322,11 @@ def merge_chunks(doc: ms.Document, chunks: list[ms.Chunk], optimize: bool = True
     :param doc: The Metashape document.
     :param chunks: A list of chunks to merge.
     :param optimize: Whether to optimize cameras after merging.
-    :param remove_old: Whether to remove
+    :param remove_old: Whether to remove the original chunks after merging.
 
-    :returns: merged_chunk: The merged chunk.
+    :returns: The merged chunk.
     """
+    # Get the integer positions of all chunks in the provided chunk list
     chunk_positions = []
     for i, chunk in enumerate(doc.chunks):
         if chunk in chunks:
@@ -390,6 +375,7 @@ def merge_chunks(doc: ms.Document, chunks: list[ms.Chunk], optimize: bool = True
         # Remove the duplicate sensor
         merged_chunk.remove(sensor)
 
+    # Assign the markers to the new merged sensors.
     for marker in merged_chunk.markers:
         if not marker.type == ms.Marker.Type.Fiducial:
             continue
@@ -397,6 +383,7 @@ def merge_chunks(doc: ms.Document, chunks: list[ms.Chunk], optimize: bool = True
             if sensor_label in marker.label:
                 marker.sensor = sensors[sensor_label]
 
+    # TODO: Remove this? Sensors are already nicely calibrated using new fiducial scripts.
     for label, sensor in sensors.items():
         if label == "unknown":
             continue
@@ -420,10 +407,11 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
     :param doc: The Metashape document to check
     :param dataset: The name of the dataset.
 
-    :returns: merged_chunk: The chunk with all stereo-pairs.
+    :returns: The chunk with all stereo-pairs.
     """
-    warnings.warn("GPU processing turned off")
-    ms.app.gpu_mask = 0
+    if not is_gpu_available():
+        warnings.warn("GPU processing turned off")
+        ms.app.gpu_mask = 0
     # Load image metadata to get the station numbers
     image_meta = inputs.get_dataset_metadata(dataset)
 
@@ -524,7 +512,7 @@ def get_chunk_stereo_pairs(chunk: ms.Chunk) -> list[str]:
 
     :param chunk: The chunk to analyse.
 
-    :returns: pairs: A list of stereo-pair group names.
+    :returns: A list of stereo-pair group names.
 
     """
     pairs: list[str] = []
@@ -544,7 +532,7 @@ def get_unfinished_pairs(chunk: ms.Chunk, step: Step) -> list[str]:
     :param chunk: The chunk to analyse.
     :param step: The step to check for.
 
-    :returns: unfinished_pairs: A list of stereo-pairs that are unfinished.
+    :returns: A list of stereo-pairs that are unfinished.
     """
     pairs = get_chunk_stereo_pairs(chunk)
 
@@ -708,7 +696,7 @@ def build_dems(chunk: ms.Chunk, pairs: list[str], redo: bool = False,
     :param resolution: The DEM resolution in metres.
     :param interpolate_pixels: The amount of small gaps to interpolate in the DEMs
 
-    :returns: filepaths: The filepaths of the exported clouds for each stereo-pair.
+    :returns: The filepaths of the exported clouds for each stereo-pair.
     """
     assert chunk.meta["dataset"] is not None
 
@@ -741,7 +729,7 @@ def build_dems(chunk: ms.Chunk, pairs: list[str], redo: bool = False,
         :param pair: The stereo-pair label
         :param filepath: The path to the input point cloud.
 
-        :returns: (pair, output_filepath): The stereo-pair label and the path to the output DEM.
+        :returns: The stereo-pair label and the path to the output DEM.
         """
         pair, filepath = pair_and_filepath
         progress_bar.desc = f"Generating DEMs for {pair}"
@@ -914,7 +902,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
             progress_bar.update()
             continue
 
-        # Skip if the coalignment fitness was poor. I think 10 is 10 m of offset
+        # Skip if the coalignment fitness was poor. I think 10 means 10 m of offset
         if result["fitness"] > max_fitness:
             progress_bar.update()
             print(f"{pair_1} to {pair_2} fitness exceeded threshold: {result['fitness']}")
@@ -991,7 +979,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
             :param pair: Which stereo-pair to look for a camera in.
             :param positions: The positions to check if they are visible or not.
 
-            :returns: good_camera: A camera that can "see" all the given positions.
+            :returns: A camera that can "see" all the given positions.
             """
             cameras_in_pair = [camera for camera in chunk.cameras if pair in camera.group.label]
 

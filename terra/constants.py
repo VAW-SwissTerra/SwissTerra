@@ -26,10 +26,12 @@ class Constants(ConstantType):  # pylint: disable=R0903
     dense_cloud_min_confidence: int = 3  # The minimum proprietary Metashape confidence value to accept.
     dem_resolution: float = 5.0  # The resolution in metres to generate DEMs with.
     max_threads: int = 20  # The maximum amount of threads to process in.
-    wild_fiducial_locations = WILD_FIDUCIAL_LOCATIONS
-    zeiss_fiducial_locations = ZEISS_FIDUCIAL_LOCATIONS
-    transform_outlier_threshold: float = 10
-    tripod_height: float = 1.2
+    wild_fiducial_locations = WILD_FIDUCIAL_LOCATIONS  # The approximate locations of the wild instrument fiducials
+    zeiss_fiducial_locations = ZEISS_FIDUCIAL_LOCATIONS  # The approximate locations of the zeiss instrument fiducials
+    transform_outlier_threshold: float = 10  # Pixel threshold for the image internal coordinate transforms
+    tripod_height: float = 1.2  # The approximate height of the tripods that were used (according to SwissTopo)
+    position_accuracy: float = 2.0  # The assumed position accuracy in m after accounting for spatial systematic shifts
+    rotation_accuracy: float = 1.0  # The assumed rotational accuracy in degrees.
 
 
 CONSTANTS = Constants()

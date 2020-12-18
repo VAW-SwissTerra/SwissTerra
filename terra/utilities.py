@@ -9,7 +9,6 @@ import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
-
 libc = ctypes.CDLL(None)
 c_stdout = ctypes.c_void_p.in_dll(libc, 'stdout')
 
@@ -95,3 +94,11 @@ def notify(message: str) -> None:
     Send a notification to the current user.
     """
     subprocess.run(["notify-send", message], check=True)
+
+
+def is_gpu_available() -> bool:
+    """Check if an NVIDIA GPU is available (if the 'nvidia-smi' command yields an error or not)."""
+    with no_stdout():
+        code = os.system("nvidia-smi")
+
+    return code == 0

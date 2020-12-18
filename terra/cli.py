@@ -60,6 +60,7 @@ def parse_args():
         "train-fiducials": "Train the frame matcher with manually picked reference fiducials",
         "estimate-fiducials": "Estimate frame transforms for all images.",
         "animate-fiducials": "Animate the automated fiducial matches.",
+        "export-fiducials": "Use the available image transforms to export fiducial locations.",
         "transform-images": "Apply the estimated fiducial transforms to the images and save them."
     }
     preprocessing_parser = commands.add_parser(
@@ -133,6 +134,9 @@ def preprocessing_commands(args):
         preprocessing.masks.generate_masks()
     elif args.action == "show-reference-mask":
         preprocessing.masks.show_reference_mask()
+
+    elif args.action == "export-fiducials":
+        preprocessing.fiducials.save_all_fiducial_locations(preprocessing.fiducials.get_all_instrument_transforms())
 
     def fetch_dataset_filenames(dataset: str) -> List[str]:
         try:

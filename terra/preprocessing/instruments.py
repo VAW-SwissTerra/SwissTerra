@@ -1,9 +1,8 @@
+"""Analyse and plot the distribution of different instruments in the dataset."""
 from __future__ import annotations
 
 import os
-from typing import Dict
 
-import cartopy
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,7 +10,7 @@ import pandas as pd
 
 from terra import files, preprocessing
 from terra.constants import CONSTANTS
-from terra.preprocessing import fiducials, image_meta, manual_picking
+from terra.preprocessing import image_meta, manual_picking
 
 
 def get_instrument_names() -> np.ndarray:

@@ -54,10 +54,10 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     coalign = not any(["tie_station" in marker.label for marker in chunk.markers])
     if coalign:
         # Check which pairs do not yet have a dense cloud
-        missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
+        pairs_missing_clouds = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
         # Make missing dense clouds
-        if len(missing_clouds_pairs) > 0:
-            metashape_tools.build_dense_clouds(chunk, pairs=missing_clouds_pairs, quality=metashape_tools.Quality.ULTRA,
+        if len(pairs_missing_clouds) > 0:
+            metashape_tools.build_dense_clouds(chunk, pairs=pairs_missing_clouds, quality=metashape_tools.Quality.ULTRA,
                                                filtering=metashape_tools.Filtering.MILD)
         metashape_tools.save_document(doc)
 
@@ -67,12 +67,14 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         metashape_tools.remove_bad_markers(chunk, marker_error_threshold=3)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
 
-        # Remove all coalignment DEMs in the temp folder to not confuse them with the better output DEMs
+        metashape_tools.save_document(doc)
+
+        # Remove all coalignment DEMs in the temp folder to not confuse them with the subsequent output DEMs
         for filename in os.listdir(inputs.CACHE_FILES[f"{dataset}_temp_dir"]):
             if filename.endswith(".tif"):
                 os.remove(os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], filename))
 
-        # Remove all coalignment DEMs in the Metashape project
+        # Remove all intermediate coalignment DEMs in the Metashape project
         for dem in chunk.elevations:
             chunk.remove(dem)
 
@@ -81,13 +83,13 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         log(dataset, "Coalignment already exists")
 
     # Generate dense clouds for all stereo-pairs that do not yet have one.
-    missing_clouds_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DENSE_CLOUD)
-    if len(missing_clouds_pairs) > 0:
-        print(f"Building {len(missing_clouds_pairs)} dense clouds")
+    pairs_missing_clouds = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DENSE_CLOUD)
+    if len(pairs_missing_clouds) > 0:
+        print(f"Building {len(pairs_missing_clouds)} dense clouds")
         time.sleep(0.3)  # This is to make the above statement come before the code below. Why? I have no idea!
         successful = metashape_tools.build_dense_clouds(
             chunk=chunk,
-            pairs=missing_clouds_pairs,
+            pairs=pairs_missing_clouds,
             quality=metashape_tools.Quality.ULTRA,
             filtering=metashape_tools.Filtering.MILD
         )
@@ -99,12 +101,12 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     if len(missing_dem_pairs) > 0:
         print(f"Building {len(missing_dem_pairs)} DEMs")
         dem_filepaths = metashape_tools.build_dems(chunk=chunk, pairs=missing_dem_pairs)
+        log(dataset, f"Made {len(dem_filepaths)} DEMs")
 
         # Copy the DEMs to the export directory
         os.makedirs("export/dems", exist_ok=True)
         for filepath in dem_filepaths.values():
             shutil.copyfile(filepath, os.path.join("export/dems", os.path.basename(filepath)))
-        log(dataset, f"Made {len(dem_filepaths)} DEMs")
     metashape_tools.save_document(doc)
 
     # Generate orthomosaics for all stereo-pairs that do not yet have one.
@@ -133,6 +135,7 @@ def process_dataset(dataset: str, redo: bool = False):
     """
     log(dataset, "Processing started")
 
+    # This is basically just a wrapper for run_processing_pipeline, but with logging functionality for exceptions.
     try:
         run_processing_pipeline(dataset, redo=redo)
     except Exception as exception:

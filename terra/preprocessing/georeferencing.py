@@ -1,3 +1,8 @@
+"""
+Functions for correcting the georeferencing information given my the metadata.
+
+Corrections are estimated from the spatial distribution of offsets from the reference DEM.
+"""
 from __future__ import annotations
 
 import os
@@ -29,7 +34,7 @@ def get_slope_and_aspect(redo: bool = False) -> tuple[rio.DatasetReader, rio.Dat
 
     :param redo: If the maps should be redone even though they exist.
 
-    :returns: Rasterio dataset readers for each respective dataset.
+    :returns: Rasterio dataset readers for the rasters (slope, aspect).
     """
     # Generate a slope and aspect map using GDAL
     filepaths = []
@@ -216,7 +221,8 @@ def generate_corrected_metadata() -> pd.DataFrame:
     return corrected_camera_locations
 
 
-def plot_metadata_position_correction() -> pd.DataFrame:
+def plot_metadata_position_correction():
+    """Plot the correction maps and error distributions."""
     image_meta = preprocessing.image_meta.read_metadata()
 
     # Set the gridsize to be approximately 1 km / px
@@ -276,8 +282,3 @@ def plot_metadata_position_correction() -> pd.DataFrame:
     plt.colorbar()
     plt.tight_layout()
     plt.show()
-    return
-
-
-if __name__ == "__main__":
-    generate_corrected_metadata()

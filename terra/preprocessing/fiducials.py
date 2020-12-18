@@ -387,7 +387,7 @@ def load_image(filename: str) -> np.ndarray:
 
 
 def transform_image(image: np.ndarray, transform: skimage.transform.EuclideanTransform,
-                    output_shape: tuple[int, int]) -> np.ndarray:
+                    output_shape: tuple[int, int], inverse: bool = True) -> np.ndarray:
     """
     Transform an image using a transform object.
 
@@ -396,9 +396,11 @@ def transform_image(image: np.ndarray, transform: skimage.transform.EuclideanTra
     :param image: The image to transform.
     :param transform: The transform object.
     :param output_shape: The target shape for the image.
+    :param inverse: Whether to warp the image using the inverse transform or not.
     :returns: A transformed image with the same dtype as the input and the same shape as output_shape.
     """
-    transformed_image = skimage.transform.warp(image, transform.inverse, output_shape=output_shape, preserve_range=True)
+    transformed_image = skimage.transform.warp(
+        image, transform.inverse if inverse else transform, output_shape=output_shape, preserve_range=True)
     return transformed_image.astype(image.dtype)
 
 
@@ -880,6 +882,7 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
         ) for instrument in instruments
     }
 
+    # Estimate fiducial transforms using template matching.
     estimated_transforms = {
         instrument: match_templates(
             filenames=instrument_filenames[instrument],
@@ -890,6 +893,7 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
         ) for instrument in instruments
     }
 
+    # Replace the poorly estimated transforms with manual transforms
     merged_transforms = {
         instrument: merge_manual_and_estimated_transforms(
             manual_transforms[instrument],
@@ -929,6 +933,7 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
             manual_picking.gui(instrument_type=instruments[instrument],
                                filenames=outliers)
 
+    # Merge the "merged transforms" from all instruments into one transforms collection object.
     all_transforms = ImageTransforms.from_multiple(list(merged_transforms.values()))
 
     if cache:
@@ -978,7 +983,7 @@ def save_fiducial_locations(image_transforms: ImageTransforms, instrument: str) 
             continue
         # Loop over all corners and mark their transformed coordinates. TODO: Look up if it should be the inverse.
         for corner_coord in median_fiducial_locations:
-            x_coord, y_coord = image_transforms[filename](corner_coord[::-1])[0]
+            x_coord, y_coord = image_transforms[filename].inverse(corner_coord[::-1])[0]
             row += [x_coord, y_coord]
 
         row += list(fiducial_locations_mm[:, ::-1].flatten())
@@ -1006,7 +1011,10 @@ def save_all_fiducial_locations(image_transforms: ImageTransforms) -> dict[str, 
     instruments = marked_fiducials.get_instrument_frame_type_relation()
 
     # Save the fiducial locations for each instrument
-    filepaths = {instrument: save_fiducial_locations(image_transforms, instrument) for instrument in instruments}
+    filepaths: dict[str, str] = {}
+    for instrument in tqdm(instruments):
+        filepath = save_fiducial_locations(image_transforms, instrument)
+        filepaths[instrument] = filepath
 
     return filepaths
 

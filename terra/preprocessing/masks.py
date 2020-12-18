@@ -1,3 +1,4 @@
+"""Image mask creation functions."""
 import concurrent.futures
 import os
 import pickle
@@ -61,7 +62,6 @@ def generate_masks(overwrite_existing: bool = False) -> None:
     instrument_filenames = {instrument: image_meta.get_filenames_for_instrument(
         instrument) for instrument in instruments}
 
-
     filenames_to_process = []
     filename_instruments: dict[str, str] = {}
     for instrument in instrument_filenames:
@@ -92,7 +92,7 @@ def generate_masks(overwrite_existing: bool = False) -> None:
         reference_frame = reference_frames[filename_instruments[filename]]
         # Transform the mask
         transformed_frame = fiducials.transform_image(
-            reference_frame, transforms[filename], output_shape=original_shape)
+            reference_frame, transforms[filename], output_shape=original_shape, inverse=False)
         # Write it to the temporary mask directory
         cv2.imwrite(full_path, transformed_frame)
         progress_bar.update()
