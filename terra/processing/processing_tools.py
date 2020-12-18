@@ -421,7 +421,7 @@ def show_processing_log():
     # A new run is assumed to always start with the event "Processing started"
     processing_nr = 0
     for i, row in log.iterrows():
-        if row["event"] == "Processing started":
+        if "Processing started" in row["event"]:
             processing_nr += 1
 
         log.loc[i, "processing_nr"] = processing_nr
@@ -429,7 +429,7 @@ def show_processing_log():
     for processing_nr, processing_log in log.groupby("processing_nr"):
         processing_time = processing_log.index.max() - processing_log.index.min()
 
-        print(processing_log.iloc[0]["dataset"])
+        print(processing_log.iloc[-1]["dataset"])
         for date, row in processing_log.iterrows():
             print(f"\t{date}\t{row['event']}")
-        print(f"Duration: {processing_time}")
+        print(f"Duration: {processing_time}\n")

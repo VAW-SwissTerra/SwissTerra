@@ -72,6 +72,10 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
             if filename.endswith(".tif"):
                 os.remove(os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], filename))
 
+        # Remove all coalignment DEMs in the Metashape project
+        for dem in chunk.elevations:
+            chunk.remove(dem)
+
         log(dataset, "Coalignment successful")
     else:
         log(dataset, "Coalignment already exists")

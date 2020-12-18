@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import time
 from typing import List
 
 from terra import files  # TODO: Change to import submodules instead
@@ -186,6 +187,7 @@ def processing_commands(args):
             for dataset in processing.inputs.get_dataset_names():
                 print(f"Processing {dataset}")
                 processing.main.process_dataset(dataset, redo=args.action == "rerun")
+                time.sleep(1)  # Allow for logging to be slightly nicer.
         processing.main.process_dataset(args.dataset, redo=args.action == "rerun")
     elif args.action == "check-inputs":
         processing.inputs.check_inputs(args.dataset)
