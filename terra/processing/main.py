@@ -57,7 +57,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         pairs_missing_clouds = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
         # Make missing dense clouds
         if len(pairs_missing_clouds) > 0:
-            metashape_tools.build_dense_clouds(chunk, pairs=pairs_missing_clouds, quality=metashape_tools.Quality.ULTRA,
+            metashape_tools.build_dense_clouds(doc, chunk, pairs=pairs_missing_clouds, quality=metashape_tools.Quality.ULTRA,
                                                filtering=metashape_tools.Filtering.MILD)
         metashape_tools.save_document(doc)
 
@@ -88,6 +88,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         print(f"Building {len(pairs_missing_clouds)} dense clouds")
         time.sleep(0.3)  # This is to make the above statement come before the code below. Why? I have no idea!
         successful = metashape_tools.build_dense_clouds(
+            doc=doc,
             chunk=chunk,
             pairs=pairs_missing_clouds,
             quality=metashape_tools.Quality.ULTRA,

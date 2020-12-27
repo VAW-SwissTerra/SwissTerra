@@ -189,8 +189,13 @@ def processing_commands(args):
     if args.action in ["run", "rerun"]:
         if args.dataset == "full":
             for dataset in processing.inputs.get_dataset_names():
+                if processing.processing_tools.is_dataset_finished(dataset):
+                    continue
                 print(f"Processing {dataset}")
-                processing.main.process_dataset(dataset, redo=args.action == "rerun")
+                try:
+                    processing.main.process_dataset(dataset, redo=args.action == "rerun")
+                except Exception as exception:
+                    print(exception)
                 time.sleep(1)  # Allow for logging to be slightly nicer.
         processing.main.process_dataset(args.dataset, redo=args.action == "rerun")
     elif args.action == "check-inputs":

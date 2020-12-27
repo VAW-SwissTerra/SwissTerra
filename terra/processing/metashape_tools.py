@@ -469,6 +469,9 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
     :param camera: The camera to reproject the marker position to.
     :param marker: The marker to compare the projection vs. reprojection on.
     """
+    # Validate that both the marker and the camera is not None
+    if None in [camera, marker]:
+        return np.NaN
     projected_position = marker.projections[camera].coord
     reprojected_position = camera.project(marker.position)
 
@@ -496,7 +499,12 @@ def get_rms_marker_reprojection_errors(markers: list[ms.Marker]) -> dict[ms.Mark
         for camera, projection in marker.projections.items():
             if not projection.pinned:
                 continue
-            errors[marker].append(get_marker_reprojection_error(camera, marker))
+            try:
+                errors[marker].append(get_marker_reprojection_error(camera, marker))
+            # TODO: Find out what happens here and add better exception handling.
+            except Exception as exception:
+                print(exception)
+                continue
 
     def rms(values: list[np.float64]):
         return np.sqrt(np.nanmean(np.square(values))).astype(np.float64)
@@ -622,15 +630,18 @@ def remove_bad_markers(chunk, marker_error_threshold: float = 4.0):
         chunk.remove(marker)
 
 
-def build_dense_clouds(chunk: ms.Chunk, pairs: list[str], quality: Quality = Quality.HIGH,
-                       filtering: Filtering = Filtering.AGGRESSIVE, all_together: bool = False) -> list[str]:
+def build_dense_clouds(doc: ms.Document, chunk: ms.Chunk, pairs: list[str], quality: Quality = Quality.HIGH,
+                       filtering: Filtering = Filtering.AGGRESSIVE, intermediate_saving: bool = True,
+                       all_together: bool = False) -> list[str]:
     """
     Generate dense clouds for all stereo-pairs in a given chunk.
 
+    :param doc: The document that the chunk is in.
     :param chunk: The chunk to process.
     :param pairs: A list of the stereo-pairs to process.
     :param quality: The quality of the dense cloud.
     :param filtering: The dense cloud filtering setting.
+    :param intermediate_saving: Whether to save the document between dense cloud generations.
     :param all_together: Whether to process every stereo-pair together.
     :returns: A list of stereo-pairs where the dense cloud generation succeeded.
     """
@@ -649,6 +660,7 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: list[str], quality: Quality = Qua
                 if "Zero resolution" in str(exception):
                     return False
                 raise exception
+
 
             chunk.dense_cloud.label = label
 
@@ -677,6 +689,8 @@ def build_dense_clouds(chunk: ms.Chunk, pairs: list[str], quality: Quality = Qua
                 chunk.dense_cloud = None
 
                 progress_bar.update()
+                if intermediate_saving:
+                    save_document(doc)
 
         # Reset the enabled flags
         for camera in chunk.cameras:
@@ -735,9 +749,14 @@ def build_dems(chunk: ms.Chunk, pairs: list[str], redo: bool = False,
         progress_bar.desc = f"Generating DEMs for {pair}"
         progress_bar.update(n=0)  # Update the text
         output_filepath = os.path.splitext(filepath)[0] + "_DEM.tif"
-        if redo or not os.path.isfile(output_filepath):
-            processing_tools.generate_dem(filepath, output_dem_path=output_filepath,
-                                          resolution=resolution, interpolate_pixels=interpolate_pixels)
+        try:
+            if redo or not os.path.isfile(output_filepath):
+                processing_tools.generate_dem(filepath, output_dem_path=output_filepath,
+                                              resolution=resolution, interpolate_pixels=interpolate_pixels)
+        # TODO: Fix better exception handling
+        except Exception as exception:
+            print(exception)
+            output_filepath = None
 
         progress_bar.update()
 
@@ -745,6 +764,11 @@ def build_dems(chunk: ms.Chunk, pairs: list[str], redo: bool = False,
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         dem_filepaths = dict(executor.map(build_dem, filepaths.items()))
+
+    # Remove all entries where DEM generation was unsuccessful.
+    for pair in list(dem_filepaths.keys()):
+        if dem_filepaths[pair] is None:
+            del dem_filepaths[pair]
 
     for dem_label, dem_filepath in dem_filepaths.items():
         with no_stdout():

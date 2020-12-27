@@ -433,3 +433,20 @@ def show_processing_log():
         for date, row in processing_log.iterrows():
             print(f"\t{date}\t{row['event']}")
         print(f"Duration: {processing_time}\n")
+
+
+def is_dataset_finished(dataset: str) -> bool:
+    """Check if 'finished' exists on a progress row with the dataset."""
+    log_path = os.path.join(inputs.TEMP_DIRECTORY, "progress.log")
+
+    with open(log_path) as infile:
+        log = infile.read().splitlines()
+
+    for line in log:
+        if dataset not in line:
+            continue
+        if "finished" in line:
+            return True
+
+    return False
+    
