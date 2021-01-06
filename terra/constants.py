@@ -32,6 +32,7 @@ class Constants(ConstantType):  # pylint: disable=R0903
     tripod_height: float = 1.2  # The approximate height of the tripods that were used (according to SwissTopo)
     position_accuracy: float = 2.0  # The assumed position accuracy in m after accounting for spatial systematic shifts
     rotation_accuracy: float = 1.0  # The assumed rotational accuracy in degrees.
+    max_height: float = 5000.0  # The highest mountain in the Alps is just less than 5000 m.
 
 
 CONSTANTS = Constants()
