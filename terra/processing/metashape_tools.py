@@ -499,12 +499,7 @@ def get_rms_marker_reprojection_errors(markers: list[ms.Marker]) -> dict[ms.Mark
         for camera, projection in marker.projections.items():
             if not projection.pinned:
                 continue
-            try:
-                errors[marker].append(get_marker_reprojection_error(camera, marker))
-            # TODO: Find out what happens here and add better exception handling.
-            except Exception as exception:
-                print(exception)
-                continue
+            errors[marker].append(get_marker_reprojection_error(camera, marker))
 
     def rms(values: list[np.float64]):
         return np.sqrt(np.nanmean(np.square(values))).astype(np.float64)
@@ -651,17 +646,20 @@ def build_dense_clouds(doc: ms.Document, chunk: ms.Chunk, pairs: list[str], qual
         for camera in chunk.cameras:
             # Set it as enabled if the camera group label fits with the stereo pair label
             camera.enabled = camera in cameras
-
         with no_stdout():
             chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
-            try:
+        try:
+            with no_stdout():
                 chunk.buildDenseCloud(point_confidence=True)
-            except Exception as exception:
-                if "Zero resolution" in str(exception):
-                    return False
-                raise exception
+        except MemoryError:
+                warnings.warn(f"Memory error on dense cloud for {label} in {chunk.meta['dataset']}")
+                return False
+        except Exception as exception:
+            if "Zero resolution" in str(exception):
+                return False
+            raise exception
 
-
+        with no_stdout():
             chunk.dense_cloud.label = label
 
             # Remove all points with a low confidence
@@ -810,8 +808,16 @@ def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> 
         # Set the "default" DEM to the one corresponding to the stereo-pair
         chunk.elevation = corresponding_dem_list[0]
 
-        with no_stdout():
-            chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData, resolution=resolution)
+        try:
+            with no_stdout():
+                chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData, resolution=resolution)
+        except Exception as exception:
+            if "Zero resolution" in str(exception):
+                print(f"Pair {pair} orthomosaic got zero resolution")
+                progress_bar.update()
+                continue
+            # If Zero resolution is not in exception:
+            raise exception
 
         # Set the label to equal the stereo-pair label
         chunk.orthomosaics[-1].label = pair
