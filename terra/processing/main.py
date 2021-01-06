@@ -105,9 +105,9 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         log(dataset, f"Made {len(dem_filepaths)} DEMs")
 
         # Copy the DEMs to the export directory
-        os.makedirs("export/dems", exist_ok=True)
+        os.makedirs(os.path.join(inputs.TEMP_DIRECTORY, "output/dems"), exist_ok=True)
         for filepath in dem_filepaths.values():
-            shutil.copyfile(filepath, os.path.join("export/dems", os.path.basename(filepath)))
+            shutil.copyfile(filepath, os.path.join(inputs.TEMP_DIRECTORY, "output/dems", os.path.basename(filepath)))
     metashape_tools.save_document(doc)
 
     # Generate orthomosaics for all stereo-pairs that do not yet have one.
@@ -116,12 +116,17 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         successful = metashape_tools.build_orthomosaics(chunk=chunk, pairs=missing_ortho_pairs, resolution=1)
         print(f"Made {len(successful)} orthomosaics")
     metashape_tools.save_document(doc)
-    metashape_tools.export_orthomosaics(chunk=chunk, pairs=pairs, directory="export/orthos", overwrite=False)
+    metashape_tools.export_orthomosaics(chunk=chunk, pairs=pairs,
+                                        directory=os.path.join(inputs.TEMP_DIRECTORY, "output/orthos"), overwrite=False)
 
-    # Remove all ply files (dense clouds that take up a lot of space and are saved in Metashape anyway)
+    # Remove all ply files (dense clouds that take up a lot of space)
     for filename in os.listdir(inputs.CACHE_FILES[f"{dataset}_temp_dir"]):
         if filename.endswith(".ply"):
             os.remove(os.path.join(inputs.CACHE_FILES[f"{dataset}_temp_dir"], filename))
+
+    # Remove all dense clouds in the Metashape project.
+    for dense_cloud in chunk.dense_clouds:
+        chunk.remove(dense_cloud)
 
     notify(f"{dataset} finished")
     log(dataset, "Processing finished")

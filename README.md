@@ -50,6 +50,7 @@ Run `terra -h` to see the how to run the program.
 
 
 ### Datasets
+#### This system below is deprecated and will not work anymore
 A dataset is defined through a `.toml` file in a `datasets/` subfolder of the input main input folder.
 Below is an example of the Rhonegletscher subset, with the path: `$SWISSTERRA_INPUT_DIR/datasets/rhone.toml`:
 

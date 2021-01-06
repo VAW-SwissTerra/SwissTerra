@@ -125,7 +125,8 @@ def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
     return output_meta
 
 
-def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_value=-9999) -> Optional[Dict[str, str]]:
+def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_value=-9999,
+                 temp_dir: Optional[str] = None) -> Optional[Dict[str, str]]:
     """
     Align two DEMs and return the ICP result.
 
@@ -133,6 +134,7 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
     param: aligned_path: The filepath to the DEM acting aligned.
     param: pixel_buffer: The amount of allowed overlap between the clouds (should be the expected offset).
     param: nan_value: The NaN value of both DEMs.
+    param: temp_dir: Optional. A temporary directory path to use. Will otherwise create one in the temp dir.
 
     return: result: The resultant PDAL output. Returns None if there was no alignment.
 
@@ -141,14 +143,15 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
     Bounds = namedtuple("Bounds", ["x_min", "x_max", "y_min", "y_max"])
 
     # temp_dir = tempfile.TemporaryDirectory()
-    temp_dir = os.path.join(
-        os.path.dirname(reference_path),
-        "coalignment",
-        "_to_".join([
-            os.path.splitext(os.path.basename(reference_path))[0],
-            os.path.splitext(os.path.basename(aligned_path))[0]
-        ])
-    )
+    if temp_dir is None:
+        temp_dir = os.path.join(
+            os.path.dirname(reference_path),
+            "coalignment",
+            "_to_".join([
+                os.path.splitext(os.path.basename(reference_path))[0],
+                os.path.splitext(os.path.basename(aligned_path))[0]
+            ])
+        )
     tempfiles = {os.path.splitext(filename)[0]: os.path.join(temp_dir, filename) for filename in [
         "reference_cropped.tif", "aligned_cropped.tif", "aligned_post_icp.tif", "result_meta.json"
     ]}
@@ -449,4 +452,3 @@ def is_dataset_finished(dataset: str) -> bool:
             return True
 
     return False
-    
