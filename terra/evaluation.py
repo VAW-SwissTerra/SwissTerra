@@ -3,13 +3,14 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 from typing import Any, Optional
 
-import matplotlib.pyplot as plt
 import numpy as np
+import pytransform3d
+import pytransform3d.rotations
+import pytransform3d.transformations
 import rasterio as rio
 import rasterio.warp  # pylint: disable=unused-import
 from tqdm import tqdm
@@ -23,6 +24,7 @@ TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "evaluation")
 CACHE_FILES = {
     "metashape_dems_dir": os.path.join(inputs.TEMP_DIRECTORY, "output/dems"),
     "ddems_dir": os.path.join(TEMP_DIRECTORY, "ddems/"),
+    "ddems_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg_ddems/"),
     "dem_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg/"),
     "dem_coreg_meta_dir": os.path.join(TEMP_DIRECTORY, "coreg_meta/"),
     "glacier_mask": os.path.join(TEMP_DIRECTORY, "glacier_mask.tif"),
@@ -34,6 +36,11 @@ def find_dems(folder: str) -> list[str]:
     dem_names = [os.path.join(folder, filename) for filename in os.listdir(folder) if filename.endswith(".tif")]
 
     return dem_names
+
+
+def extract_station_name(filepath: str) -> str:
+    """Find the station name (e.g. station_3500) inside a filepath."""
+    return filepath[filepath.index("station_"):filepath.index("station_") + 12]
 
 
 def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float],
@@ -54,12 +61,7 @@ def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float],
     # Make an Affine transform from the bounds and the new size
     dst_transform = rio.transform.from_bounds(**bounds, width=dst_shape[1], height=dst_shape[0])
     # Make an empty numpy array which will later be filled with elevation values
-    try:
-        destination = np.empty(dst_shape, dem.dtypes[0])
-    except AttributeError:
-        print(dem)
-        print(dir(dem))
-        raise AttributeError
+    destination = np.empty(dst_shape, dem.dtypes[0])
     # Set all values to nan right now
     destination[:, :] = np.nan
 
@@ -122,7 +124,7 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
     return reference_elevation
 
 
-def compare_dem(filepath: str) -> None:
+def compare_dem(filepath: str, save: bool = True, output_dir: str = CACHE_FILES["ddems_dir"]) -> np.ndarray:
     """Compare the DEM difference between the reference DEM and the given filepath."""
     dem = rio.open(filepath)
     dem_elevation = dem.read(1)
@@ -138,20 +140,23 @@ def compare_dem(filepath: str) -> None:
     ddem = reference_elevation - dem_elevation
 
     # Get the station name from the filepath, e.g. station_3500
-    station_name = filepath[filepath.index("station_"):filepath.index("station_") + 12]
+    station_name = extract_station_name(filepath)
 
     # Write the DEM difference product.
-    with rio.open(
-            os.path.join(CACHE_FILES["ddems_dir"], f"{station_name}_ddem.tif"),
-            mode="w",
-            driver="GTiff",
-            width=ddem.shape[1],
-            height=ddem.shape[0],
-            crs=dem.crs,
-            transform=rio.transform.from_bounds(**bounds, width=ddem.shape[1], height=ddem.shape[0]),
-            dtype=ddem.dtype,
-            count=1) as raster:
-        raster.write(ddem, 1)
+    if save:
+        with rio.open(
+                os.path.join(output_dir, f"{station_name}_ddem.tif"),
+                mode="w",
+                driver="GTiff",
+                width=ddem.shape[1],
+                height=ddem.shape[0],
+                crs=dem.crs,
+                transform=rio.transform.from_bounds(**bounds, width=ddem.shape[1], height=ddem.shape[0]),
+                dtype=ddem.dtype,
+                count=1) as raster:
+            raster.write(ddem, 1)
+
+    return ddem
 
 
 def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS.dem_resolution):
@@ -222,7 +227,7 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
     result_path = os.path.join(temp_dir.name, "result_meta.json")
 
     # Determine the name of the output DEM
-    station_name = filepath[filepath.rindex("station_"):filepath.index("_dense_")]
+    station_name = extract_station_name(filepath)
     aligned_dem_path = os.path.join(CACHE_FILES["dem_coreg_dir"], f"{station_name}_coregistered.tif")
 
     # Save the cropped and glacier-masked DEM and reference DEM
@@ -322,24 +327,90 @@ def coregister_all_dems():
     progress_bar.close()
 
 
-def compare_all_dems(folder: str = CACHE_FILES["dem_coreg_dir"]):
+def compare_all_dems(folder: str = CACHE_FILES["dem_coreg_dir"], out_dir: str = CACHE_FILES["ddems_coreg_dir"]):
 
     dem_filepaths = find_dems(folder)
     progress_bar = tqdm(total=len(dem_filepaths))
 
-    os.makedirs(CACHE_FILES["ddems_dir"], exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
 
     def compare_filepath(filepath):
         """Compare a DEM and update the progress bar."""
-        compare_dem(filepath)
+        compare_dem(filepath, output_dir=out_dir)
         progress_bar.update()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         list(executor.map(compare_filepath, dem_filepaths))
 
 
+def merge_ddems(verbose=True):
+
+    ddem_filepaths = find_dems(CACHE_FILES["ddems_coreg_dir"])
+
+    filepaths: list[str] = []
+    for filepath in ddem_filepaths:
+        station_name = extract_station_name(filepath)
+        with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")) as infile:
+            coreg_stats = json.load(infile)
+
+        matrix = np.array(coreg_stats["transform"].replace("\n", " ").split(" ")).astype(float).reshape((4, 4))
+        pytransform3d.transformations.check_transform(matrix)
+        quaternion = pytransform3d.transformations.pq_from_transform(matrix)[3:]
+
+        angle = np.rad2deg(pytransform3d.rotations.axis_angle_from_quaternion(quaternion)[3])
+
+        old_ddem_filepath = filepath.replace(CACHE_FILES["ddems_coreg_dir"], CACHE_FILES["ddems_dir"])
+        if angle < 5:
+            filepaths.append(old_ddem_filepath)
+            continue
+        filepaths.append(filepath)
+
+    temp_dir = tempfile.TemporaryDirectory()
+    progress_bar = tqdm(total=len(filepaths))
+
+    def fix_nan(in_filepath):
+
+        dem = rio.open(in_filepath)
+        station_name = extract_station_name(in_filepath)
+        out_filepath = os.path.join(temp_dir.name, f"{station_name}.tif")
+        bounds = dict(zip(["west", "south", "east", "north"], list(dem.bounds)))
+        dem_elevation = dem.read(1)
+        dem_elevation[np.isnan(dem_elevation)] = -9999
+
+        transform = rio.transform.from_bounds(**bounds, width=dem.width, height=dem.height)
+
+        with rio.open(
+                out_filepath,
+                mode="w",
+                driver="GTiff",
+                width=dem.width,
+                height=dem.height,
+                count=1,
+                crs=dem.crs,
+                transform=transform,
+                nodata=-9999,
+                dtype=dem_elevation.dtype) as raster:
+            raster.write(dem_elevation, 1)
+
+        progress_bar.update()
+        return out_filepath
+
+    print("Fixing nans")
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        fixed_filepaths = list(executor.map(fix_nan, filepaths))
+
+    progress_bar.close()
+
+    # gdal_commands = ["gdalbuildvrt", "temp/evaluation/tiles.vrt", *filepaths, "-vrtnodata", "0", "-overwrite"]
+    gdal_commands = ["gdal_merge.py", "-o", "temp/evaluation/merged_ddem.tif",
+                     *fixed_filepaths, "-n", "-9999", "-a_nodata", "-9999", "-init", "-9999"]
+    print("Merging dDEMs")
+    subprocess.run(gdal_commands, check=True)
+
+
 if __name__ == "__main__":
 
-    generate_glacier_mask()
-    coregister_all_dems()
-    compare_all_dems()
+    # generate_glacier_mask()
+    # coregister_all_dems()
+    #compare_all_dems(CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"])
+    merge_ddems()
