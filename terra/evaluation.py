@@ -5,14 +5,20 @@ import json
 import os
 import subprocess
 import tempfile
+import warnings
 from typing import Any, Optional
 
+import matplotlib.pyplot as plt
+import matplotlib.widgets
 import numpy as np
+import pandas as pd
 import pytransform3d
 import pytransform3d.rotations
 import pytransform3d.transformations
 import rasterio as rio
 import rasterio.warp  # pylint: disable=unused-import
+import sklearn.linear_model
+import sklearn.utils
 from tqdm import tqdm
 
 from terra import files
@@ -28,6 +34,8 @@ CACHE_FILES = {
     "dem_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg/"),
     "dem_coreg_meta_dir": os.path.join(TEMP_DIRECTORY, "coreg_meta/"),
     "glacier_mask": os.path.join(TEMP_DIRECTORY, "glacier_mask.tif"),
+    "ddem_quality": os.path.join(TEMP_DIRECTORY, "ddem_quality.csv"),
+    "ddem_stats": os.path.join(TEMP_DIRECTORY, "ddem_stats.pkl"),
 }
 
 
@@ -124,7 +132,7 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
     return reference_elevation
 
 
-def compare_dem(filepath: str, save: bool = True, output_dir: str = CACHE_FILES["ddems_dir"]) -> np.ndarray:
+def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILES["ddems_dir"]) -> np.ndarray:
     """Compare the DEM difference between the reference DEM and the given filepath."""
     dem = rio.open(filepath)
     dem_elevation = dem.read(1)
@@ -327,7 +335,7 @@ def coregister_all_dems():
     progress_bar.close()
 
 
-def compare_all_dems(folder: str = CACHE_FILES["dem_coreg_dir"], out_dir: str = CACHE_FILES["ddems_coreg_dir"]):
+def generate_all_ddems(folder: str = CACHE_FILES["dem_coreg_dir"], out_dir: str = CACHE_FILES["ddems_coreg_dir"]):
 
     dem_filepaths = find_dems(folder)
     progress_bar = tqdm(total=len(dem_filepaths))
@@ -336,16 +344,41 @@ def compare_all_dems(folder: str = CACHE_FILES["dem_coreg_dir"], out_dir: str = 
 
     def compare_filepath(filepath):
         """Compare a DEM and update the progress bar."""
-        compare_dem(filepath, output_dir=out_dir)
+        generate_ddem(filepath, output_dir=out_dir)
         progress_bar.update()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         list(executor.map(compare_filepath, dem_filepaths))
 
 
-def merge_ddems(verbose=True):
+def read_icp_stats(station_name: str):
 
-    ddem_filepaths = find_dems(CACHE_FILES["ddems_coreg_dir"])
+    with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")) as infile:
+        coreg_stats = json.load(infile)
+
+    matrix = np.array(coreg_stats["transform"].replace("\n", " ").split(" ")).astype(float).reshape((4, 4))
+    pytransform3d.transformations.check_transform(matrix)
+    quaternion = pytransform3d.transformations.pq_from_transform(matrix)[3:]
+
+    angle = np.rad2deg(pytransform3d.rotations.axis_angle_from_quaternion(quaternion)[3])
+
+    stats = {"fitness": coreg_stats["fitness"], "overlap": coreg_stats["overlap"], "angle": angle}
+
+    return stats
+
+
+def read_and_crop_glacier_mask(raster: rio.DatasetReader) -> np.ndarray:
+    bounds = dict(zip(["west", "south", "east", "north"], list(raster.bounds)))
+    glacier_mask_dataset = rio.open(CACHE_FILES["glacier_mask"])
+    cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds, CONSTANTS.dem_resolution) == 1
+    glacier_mask_dataset.close()
+
+    return cropped_glacier_mask
+
+
+def merge_ddems(ddem_filepaths: list[str]):
+
+    #ddem_filepaths = find_dems(CACHE_FILES["ddems_coreg_dir"])
 
     filepaths: list[str] = []
     for filepath in ddem_filepaths:
@@ -408,9 +441,202 @@ def merge_ddems(verbose=True):
     subprocess.run(gdal_commands, check=True)
 
 
+def examine_ddem(filepath: str):
+
+    def log_certainty(filepath: str, quality: str):
+
+        print(f"Registered {filepath} as {quality}")
+
+        with open(CACHE_FILES["ddem_quality"], "a+") as outfile:
+            line = f"{filepath},{quality}\n"
+            outfile.write(line)
+    ddem = rio.open(filepath)
+    ddem_values = ddem.read(1)
+    bounds = dict(zip(["west", "south", "east", "north"], list(ddem.bounds)))
+
+    should_stop = False
+
+    def stop(*_):
+        nonlocal should_stop
+        should_stop = True
+
+    # Load and crop/resample the glacier mask and reference DEM
+    # The glacier mask is converted to a boolean array using the "== 1" comparison.
+    glacier_mask_dataset = rio.open(CACHE_FILES["glacier_mask"])
+    cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds, CONSTANTS.dem_resolution) == 1
+    glacier_mask_dataset.close()
+    plt.subplot(111)
+    plt.imshow(cropped_glacier_mask, cmap="Greys_r")
+    plt.imshow(ddem_values, cmap="coolwarm_r", vmin=-100, vmax=100)
+
+    axcut = plt.axes([0.9, 0.0, 0.1, 0.075])
+    good_button = matplotlib.widgets.Button(axcut, "Good", )
+    good_button.on_clicked(lambda _: log_certainty(filepath, "good"))
+
+    axcut2 = plt.axes([0.8, 0.0, 0.1, 0.075])
+    bad_button = matplotlib.widgets.Button(axcut2, "Bad")
+    bad_button.on_clicked(lambda _: log_certainty(filepath, "bad"))
+
+    axcut3 = plt.axes([0.7, 0.0, 0.1, 0.075])
+    unclear_button = matplotlib.widgets.Button(axcut3, "Unclear")
+    unclear_button.on_clicked(lambda _: log_certainty(filepath, "unclear"))
+
+    axcut4 = plt.axes([0.5, 0.0, 0.1, 0.075])
+    stop_button = matplotlib.widgets.Button(axcut4, "Stop")
+    stop_button.on_clicked(stop)
+    plt.show()
+
+    return should_stop
+
+
+def model_df(data: pd.DataFrame, training_cols: list[str], target_col: str) -> tuple[sklearn.linear_model.LogisticRegression, float]:
+
+    models = {}
+    for _ in range(10):
+        shuffled_data = sklearn.utils.shuffle(data)
+
+        train_test_border = int(shuffled_data.shape[0] * 0.9)
+
+        training_data = shuffled_data.iloc[train_test_border:]
+        testing_data = shuffled_data.iloc[:train_test_border]
+        with warnings.catch_warnings(record=True) as warning_filter:
+            warnings.simplefilter("always")
+            model = sklearn.linear_model.LogisticRegression(
+                random_state=0, solver='lbfgs', multi_class='ovr', max_iter=300)
+            try:
+                model.fit(training_data[training_cols], training_data[target_col])
+            except ValueError:
+                continue
+            score = model.score(testing_data[training_cols], testing_data[target_col])
+
+            n_good = np.count_nonzero(model.predict(shuffled_data[training_cols]))
+            models[n_good] = model, score
+
+    return models[max(models.keys())]
+
+
+def get_ddem_stats(directory: str, redo=False) -> pd.DataFrame:
+    ddems = find_dems(directory)
+
+    if os.path.isfile(CACHE_FILES["ddem_stats"]) and not redo:
+        return pd.read_pickle(CACHE_FILES["ddem_stats"])
+
+    stats = pd.DataFrame(data=ddems, columns=["filepath"])
+    stats["station_name"] = stats["filepath"].apply(extract_station_name)
+
+    for i, filepath in tqdm(enumerate(ddems), total=len(ddems)):
+        ddem = rio.open(filepath)
+        glacier_mask = read_and_crop_glacier_mask(ddem)
+        ddem_values = ddem.read(1)
+
+        for on_off, values in zip(["on", "off"], [ddem_values[glacier_mask], ddem_values[~glacier_mask]]):
+            col_names = [f"{on_off}_{stat}" for stat in ["count", "median", "upper", "lower"]]
+            if np.all(np.isnan(values)):
+                stats.loc[i, col_names] = [0] + [200] * (len(col_names) - 1)
+                continue
+            count = np.count_nonzero(~np.isnan(values))
+            median = np.nanmedian(values)
+            upper_percentile = np.nanpercentile(values, 95)
+            lower_percentile = np.nanpercentile(values, 5)
+            stats.loc[i, col_names] = count, median, upper_percentile, lower_percentile
+
+    stats.to_pickle(CACHE_FILES["ddem_stats"])
+    return stats
+
+
+def evaluate_ddems(improve: bool = False):
+
+    coreg_ddems = np.array(find_dems(CACHE_FILES["ddems_coreg_dir"]))
+
+    np.random.shuffle(coreg_ddems)
+
+    existing_filepaths: list[str] = []
+
+    if os.path.exists(CACHE_FILES["ddem_quality"]):
+        existing_filepaths += list(pd.read_csv(CACHE_FILES["ddem_quality"], header=None).iloc[:, 0])
+
+    stopped = False
+    if improve:
+        for filepath in coreg_ddems:
+            if stopped:
+                break
+            if filepath in existing_filepaths:
+                continue
+            stopped = examine_ddem(filepath)
+            existing_filepaths.append(filepath)
+
+    log = pd.read_csv(CACHE_FILES["ddem_quality"], header=None, names=["filepath", "quality"])\
+            .drop_duplicates("filepath", keep="last")
+    log = log[log["quality"] != "unclear"]
+    log["station_name"] = log["filepath"].apply(extract_station_name)
+    log["good"] = log["quality"] == "good"
+
+    log = sklearn.utils.shuffle(log)
+
+    for i, row in log.iterrows():
+        stats = read_icp_stats(row["station_name"])
+        log.loc[i, list(stats.keys())] = list(stats.values())
+
+    model, score = model_df(log, log.columns[4:], "good")
+    print(f"Modelled coregistered dDEM usability with an accuracy of: {score:.2f}")
+
+    all_files = pd.DataFrame(data=find_dems(CACHE_FILES["ddems_dir"]), columns=["filepath"])
+    all_files["station_name"] = all_files["filepath"].apply(extract_station_name)
+
+    for i, row in all_files.iterrows():
+        stats = read_icp_stats(row["station_name"])
+        all_files.loc[i, list(stats.keys())] = list(stats.values())
+
+    all_files["good"] = model.predict(all_files[["fitness", "overlap", "angle"]])
+
+    stopped = False
+    if improve:
+        for filepath in all_files[~all_files["good"]]["filepath"].values:
+            if filepath in existing_filepaths:
+                continue
+            stopped = examine_ddem(filepath)
+            existing_filepaths.append(filepath)
+
+    non_coreg_log = pd.read_csv(CACHE_FILES["ddem_quality"], header=None, names=["filepath", "quality"])\
+        .drop_duplicates("filepath", keep="last")
+    # Keep only the filepaths containing /ddems/ (not /coreg_ddems/)
+    non_coreg_log = non_coreg_log[non_coreg_log["filepath"].str.contains("/ddems/")]
+    # Remove the "unclear" marks
+    non_coreg_log = non_coreg_log[non_coreg_log["quality"] != "unclear"]
+    # Convert the good/bad quality column into a boolean column
+    non_coreg_log["good"] = non_coreg_log["quality"] == "good"
+    non_coreg_log["station_name"] = non_coreg_log["filepath"].apply(extract_station_name)
+
+    ddem_stats = get_ddem_stats(CACHE_FILES["ddems_dir"])
+    training_cols = ddem_stats.columns[2:]
+    for i, row in non_coreg_log.iterrows():
+        stat_row = ddem_stats.loc[ddem_stats["filepath"] == row["filepath"]].iloc[0]
+
+        non_coreg_log.loc[i, training_cols] = stat_row.loc[training_cols]
+
+    model, score = model_df(non_coreg_log, training_cols, "good")
+    print(f"Modelled normal dDEM usability with an accuracy of {score:.2f}")
+
+    ddem_stats["good"] = model.predict(ddem_stats[training_cols])
+
+    good_log = log[log["good"]]
+    output_filepaths: list[str] = list(log[log["good"]]["filepath"].values)
+
+    usable_old_ddems = 0
+    for i, row in ddem_stats.iterrows():
+        if not row["good"] or row["station_name"] in good_log["station_name"].values:
+            continue
+        usable_old_ddems += 1
+        output_filepaths.append(row["filepath"])
+
+    return output_filepaths
+
+
 if __name__ == "__main__":
 
     # generate_glacier_mask()
     # coregister_all_dems()
-    #compare_all_dems(CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"])
-    merge_ddems()
+    # compare_all_dems(CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"])
+    filepaths = evaluate_ddems()
+    merge_ddems(filepaths)
+    # get_ddem_stats(CACHE_FILES["ddems_dir"])
