@@ -36,6 +36,7 @@ CACHE_FILES = {
     "glacier_mask": os.path.join(TEMP_DIRECTORY, "glacier_mask.tif"),
     "ddem_quality": os.path.join(TEMP_DIRECTORY, "ddem_quality.csv"),
     "ddem_stats": os.path.join(TEMP_DIRECTORY, "ddem_stats.pkl"),
+    "merged_ddem": os.path.join(TEMP_DIRECTORY, "merged_ddem.tif"),
 }
 
 
@@ -170,7 +171,7 @@ def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILE
 def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS.dem_resolution):
     """Generate a boolean glacier mask from the 1935 map."""
     # Skip if it already exists
-    if not overwrite and os.path.isfile(files.INPUT_FILES["base_DEM"]):
+    if not overwrite and os.path.isfile(CACHE_FILES["glacier_mask"]):
         return
     # Get the bounds from the reference DEM
     reference_bounds = json.loads(
@@ -228,6 +229,9 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
     dem_elevation[cropped_glacier_mask] = np.nan
     cropped_reference_dem[cropped_glacier_mask] = np.nan
 
+    if np.all(np.isnan(cropped_reference_dem)):
+        return None
+
     # Create a temporary directory and temporary filenames for the analysis.
     temp_dir = tempfile.TemporaryDirectory()
     temp_dem_path = os.path.join(temp_dir.name, "dem.tif")
@@ -254,6 +258,9 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
     with rio.open(temp_ref_path, **rio_params) as raster:
         raster.write(cropped_reference_dem, 1)
 
+    for path in [temp_dem_path, temp_ref_path]:
+        assert os.path.isfile(path)
+
     # Run the DEM coalignment
     processing_tools.coalign_dems(
         reference_path=temp_ref_path,
@@ -263,8 +270,12 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
     )
 
     # Load the resulting statistics
-    with open(result_path) as infile:
-        stats = json.load(infile)["stages"]["filters.icp"]
+    try:
+        with open(result_path) as infile:
+            stats = json.load(infile)["stages"]["filters.icp"]
+    except FileNotFoundError:
+        print(f"Filepath {filepath} stats not found. Failed alignment?")
+        return None
 
     # Use the resultant transformation to transform the original DEM
     processing_tools.run_pdal_pipeline(
@@ -317,22 +328,24 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
     return stats
 
 
-def coregister_all_dems():
+def coregister_all_dems(overwrite: bool = False):
     dem_filepaths = find_dems(CACHE_FILES["metashape_dems_dir"])
-    progress_bar = tqdm(total=len(dem_filepaths))
 
     os.makedirs(CACHE_FILES["dem_coreg_dir"], exist_ok=True)
     os.makedirs(CACHE_FILES["dem_coreg_meta_dir"], exist_ok=True)
 
-    def coregister_filepath(filepath):
-        """Coregister a DEM and update the progress bar."""
+    progress_bar = tqdm(total=len(dem_filepaths))
+
+    for filepath in dem_filepaths:
+        progress_bar.desc = filepath
+        # Determine the name of the output DEM
+        station_name = extract_station_name(filepath)
+        aligned_dem_path = os.path.join(CACHE_FILES["dem_coreg_dir"], f"{station_name}_coregistered.tif")
+        if not overwrite and os.path.isfile(aligned_dem_path):
+            progress_bar.update()
+            continue
         coregister_dem(filepath, CACHE_FILES["glacier_mask"])
         progress_bar.update()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        list(executor.map(coregister_filepath, dem_filepaths))
-
-    progress_bar.close()
 
 
 def generate_all_ddems(folder: str = CACHE_FILES["dem_coreg_dir"], out_dir: str = CACHE_FILES["ddems_coreg_dir"]):
@@ -378,67 +391,59 @@ def read_and_crop_glacier_mask(raster: rio.DatasetReader) -> np.ndarray:
 
 def merge_ddems(ddem_filepaths: list[str]):
 
-    #ddem_filepaths = find_dems(CACHE_FILES["ddems_coreg_dir"])
+    bounds: dict[str, float] = {}
 
-    filepaths: list[str] = []
     for filepath in ddem_filepaths:
-        station_name = extract_station_name(filepath)
-        with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")) as infile:
-            coreg_stats = json.load(infile)
+        ddem = rio.open(filepath)
 
-        matrix = np.array(coreg_stats["transform"].replace("\n", " ").split(" ")).astype(float).reshape((4, 4))
-        pytransform3d.transformations.check_transform(matrix)
-        quaternion = pytransform3d.transformations.pq_from_transform(matrix)[3:]
+        bounds["west"] = min(bounds.get("west") or 1e22, ddem.bounds.left)
+        bounds["east"] = max(bounds.get("east") or -1e22, ddem.bounds.right)
+        bounds["south"] = min(bounds.get("south") or 1e22, ddem.bounds.bottom)
+        bounds["north"] = max(bounds.get("north") or -1e22, ddem.bounds.top)
 
-        angle = np.rad2deg(pytransform3d.rotations.axis_angle_from_quaternion(quaternion)[3])
+        ddem.close()
 
-        old_ddem_filepath = filepath.replace(CACHE_FILES["ddems_coreg_dir"], CACHE_FILES["ddems_dir"])
-        if angle < 5:
-            filepaths.append(old_ddem_filepath)
-            continue
-        filepaths.append(filepath)
+    output_shape = (
+        int((bounds["north"] - bounds["south"]) / CONSTANTS.dem_resolution),
+        int((bounds["east"] - bounds["west"]) / CONSTANTS.dem_resolution),
+    )
 
-    temp_dir = tempfile.TemporaryDirectory()
-    progress_bar = tqdm(total=len(filepaths))
+    merged_ddem = np.zeros(shape=output_shape, dtype=np.float32) - 9999
+    value_count = np.zeros(merged_ddem.shape, dtype=np.uint8)
 
-    def fix_nan(in_filepath):
+    for filepath in tqdm(ddem_filepaths):
+        ddem = rio.open(filepath)
 
-        dem = rio.open(in_filepath)
-        station_name = extract_station_name(in_filepath)
-        out_filepath = os.path.join(temp_dir.name, f"{station_name}.tif")
-        bounds = dict(zip(["west", "south", "east", "north"], list(dem.bounds)))
-        dem_elevation = dem.read(1)
-        dem_elevation[np.isnan(dem_elevation)] = -9999
+        top_index = int((bounds["north"] - ddem.bounds.top) / CONSTANTS.dem_resolution)
+        left_index = int((ddem.bounds.left - bounds["west"]) / CONSTANTS.dem_resolution)
 
-        transform = rio.transform.from_bounds(**bounds, width=dem.width, height=dem.height)
+        ddem_values = ddem.read(1)
+        merged_ddem[top_index:top_index + ddem.height, left_index:left_index + ddem.width] += np.nan_to_num(ddem_values)
+        value_count[top_index:top_index + ddem.height, left_index:left_index +
+                    ddem.width] += np.logical_not(np.isnan(ddem_values)).astype(np.uint8)
 
-        with rio.open(
-                out_filepath,
-                mode="w",
-                driver="GTiff",
-                width=dem.width,
-                height=dem.height,
-                count=1,
-                crs=dem.crs,
-                transform=transform,
-                nodata=-9999,
-                dtype=dem_elevation.dtype) as raster:
-            raster.write(dem_elevation, 1)
+        ddem.close()
 
-        progress_bar.update()
-        return out_filepath
+    merged_ddem[merged_ddem == -9999] = np.nan
+    merged_ddem += 9999
+    merged_ddem /= value_count
 
-    print("Fixing nans")
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        fixed_filepaths = list(executor.map(fix_nan, filepaths))
+    merged_ddem[(merged_ddem < -400) | (merged_ddem > 100)] = np.nan
 
-    progress_bar.close()
-
-    # gdal_commands = ["gdalbuildvrt", "temp/evaluation/tiles.vrt", *filepaths, "-vrtnodata", "0", "-overwrite"]
-    gdal_commands = ["gdal_merge.py", "-o", "temp/evaluation/merged_ddem.tif",
-                     *fixed_filepaths, "-n", "-9999", "-a_nodata", "-9999", "-init", "-9999"]
-    print("Merging dDEMs")
-    subprocess.run(gdal_commands, check=True)
+    transform = rio.transform.from_bounds(**bounds, width=merged_ddem.shape[1], height=merged_ddem.shape[0])
+    with rio.open(
+            CACHE_FILES["merged_ddem"],
+            mode="w",
+            driver="GTiff",
+            width=merged_ddem.shape[1],
+            height=merged_ddem.shape[0],
+            count=1,
+            crs=rio.open(ddem_filepaths[0]).crs,
+            transform=transform,
+            dtype=merged_ddem.dtype,
+            nodata=-9999
+    ) as raster:
+        raster.write(merged_ddem, 1)
 
 
 def examine_ddem(filepath: str):
@@ -512,6 +517,9 @@ def model_df(data: pd.DataFrame, training_cols: list[str], target_col: str) -> t
             n_good = np.count_nonzero(model.predict(shuffled_data[training_cols]))
             models[n_good] = model, score
 
+            if score > 0.9:
+                break
+
     return models[max(models.keys())]
 
 
@@ -524,7 +532,7 @@ def get_ddem_stats(directory: str, redo=False) -> pd.DataFrame:
     stats = pd.DataFrame(data=ddems, columns=["filepath"])
     stats["station_name"] = stats["filepath"].apply(extract_station_name)
 
-    for i, filepath in tqdm(enumerate(ddems), total=len(ddems)):
+    for i, filepath in tqdm(enumerate(ddems), total=len(ddems), desc="Calculating dDEM statistics"):
         ddem = rio.open(filepath)
         glacier_mask = read_and_crop_glacier_mask(ddem)
         ddem_values = ddem.read(1)
@@ -566,7 +574,7 @@ def evaluate_ddems(improve: bool = False):
             existing_filepaths.append(filepath)
 
     log = pd.read_csv(CACHE_FILES["ddem_quality"], header=None, names=["filepath", "quality"])\
-            .drop_duplicates("filepath", keep="last")
+        .drop_duplicates("filepath", keep="last")
     log = log[log["quality"] != "unclear"]
     log["station_name"] = log["filepath"].apply(extract_station_name)
     log["good"] = log["quality"] == "good"
@@ -577,17 +585,39 @@ def evaluate_ddems(improve: bool = False):
         stats = read_icp_stats(row["station_name"])
         log.loc[i, list(stats.keys())] = list(stats.values())
 
-    model, score = model_df(log, log.columns[4:], "good")
+    for _ in range(3):
+        model, score = model_df(log, log.columns[4:], "good")
+        if score > 0.9:
+            break
+    else:
+        raise ValueError(f"Score too low: {score:.2f}. Try running again.")
+
     print(f"Modelled coregistered dDEM usability with an accuracy of: {score:.2f}")
 
-    all_files = pd.DataFrame(data=find_dems(CACHE_FILES["ddems_dir"]), columns=["filepath"])
+    all_files = pd.DataFrame(data=find_dems(CACHE_FILES["ddems_coreg_dir"]), columns=["filepath"])
     all_files["station_name"] = all_files["filepath"].apply(extract_station_name)
+    all_files["good"] = np.nan
 
     for i, row in all_files.iterrows():
-        stats = read_icp_stats(row["station_name"])
+        if row["filepath"] in log["filepath"]:
+            all_files.loc[i, log.columns] = log.loc[row["filepath"] == log["filepath"]].iloc[0]
+            continue
+        try:
+            stats = read_icp_stats(row["station_name"])
+        except FileNotFoundError:
+            all_files.drop(index=i, inplace=True)
+            continue
         all_files.loc[i, list(stats.keys())] = list(stats.values())
 
+    all_files.loc[np.isnan(all_files["good"]), "good"] = model.predict(
+        all_files.loc[np.isnan(all_files["good"]), ["fitness", "overlap", "angle"]])
     all_files["good"] = model.predict(all_files[["fitness", "overlap", "angle"]])
+
+    good_filepaths = list(all_files[all_files["good"]]["filepath"].values)
+
+    print(len(good_filepaths))
+
+    return good_filepaths
 
     stopped = False
     if improve:
@@ -597,8 +627,8 @@ def evaluate_ddems(improve: bool = False):
             stopped = examine_ddem(filepath)
             existing_filepaths.append(filepath)
 
-    non_coreg_log = pd.read_csv(CACHE_FILES["ddem_quality"], header=None, names=["filepath", "quality"])\
-        .drop_duplicates("filepath", keep="last")
+    non_coreg_log = pd.read_csv(CACHE_FILES["ddem_quality"], header=None, names=["filepath", "quality"])
+    # .drop_duplicates("filepath", keep="last")
     # Keep only the filepaths containing /ddems/ (not /coreg_ddems/)
     non_coreg_log = non_coreg_log[non_coreg_log["filepath"].str.contains("/ddems/")]
     # Remove the "unclear" marks
@@ -622,6 +652,8 @@ def evaluate_ddems(improve: bool = False):
     good_log = log[log["good"]]
     output_filepaths: list[str] = list(log[log["good"]]["filepath"].values)
 
+    return output_filepaths
+
     usable_old_ddems = 0
     for i, row in ddem_stats.iterrows():
         if not row["good"] or row["station_name"] in good_log["station_name"].values:
@@ -632,11 +664,32 @@ def evaluate_ddems(improve: bool = False):
     return output_filepaths
 
 
+def compute_merged_ddem_stats():
+
+    ddem_dataset = rio.open(CACHE_FILES["merged_ddem"])
+    glacier_mask = read_and_crop_glacier_mask(ddem_dataset)
+
+    ddem_values = ddem_dataset.read(1)
+    print("Read dDEM and glacier mask")
+    periglacial_values = ddem_values[glacier_mask]
+    periglacial_values = periglacial_values[~np.isnan(periglacial_values)]
+
+    #periglacial_values = periglacial_values[np.abs(periglacial_values) < np.percentile(periglacial_values, 99)]
+
+    print(np.nanmedian(periglacial_values), np.nanstd(periglacial_values))
+    plt.hist(periglacial_values, bins=100)
+    plt.show()
+
+
 if __name__ == "__main__":
 
+    # print("Generating glacier mask")
     # generate_glacier_mask()
+    # print("Coregistering DEMs")
     # coregister_all_dems()
-    # compare_all_dems(CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"])
-    filepaths = evaluate_ddems()
+    # print("Generating dDEMs")
+    # generate_all_ddems()
+    # generate_all_ddems(CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"])
+    filepaths = evaluate_ddems(improve=False)
     merge_ddems(filepaths)
-    # get_ddem_stats(CACHE_FILES["ddems_dir"])
+    compute_merged_ddem_stats()
