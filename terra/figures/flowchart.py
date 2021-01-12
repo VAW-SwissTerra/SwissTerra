@@ -6,9 +6,9 @@ import graphviz
 
 
 def generate_flowchart():
-    dot = graphviz.Digraph(comment="Hello there")
+    dot = graphviz.Digraph()
 
-    dot.attr(label="* = Not yet implemented", size="8,12")
+    dot.attr(label="* = Not yet implemented", size="8.3,11.7!", ratio="fill")
     metashape_attrs = dict(color="blue", label="Metashape")
 
     input_style = dict(fillcolor="skyblue", shape="box", style="filled", fontcolor="black")
@@ -16,21 +16,22 @@ def generate_flowchart():
     process_style = dict(fillcolor="lightgreen", style="filled", fontcolor="black")
     output_style = dict(fillcolor="lightpink", style="filled", fontcolor="black")
 
-    dot.node("input-dem", "Modern DEM (swissAlti3D)", **input_style)
-    dot.node("input-meta", "Image metadata files", **input_style)
+    with dot.subgraph(name="cluster_inputs_0") as cluster:
+        cluster.attr(color="none", label="")
+        cluster.node("input-meta", "Image metadata files", **input_style)
+        cluster.node("input-images", "Images", **input_style)
+        cluster.node("input-dem", "Modern DEM (swissAlti3D)", **input_style)
 
     dot.node("process-slope_aspect_map", "Slope/aspect map generation", **process_style)
     dot.node("interm-slope_aspect_map", "Slope/aspect maps", **intermediate_file_style)
 
     dot.node("process-meta_to_dem_comparison", "Recorded vs. DEM height comparison", **process_style)
     dot.node("interm-offset_fields", "X/Y/Z 1x1 km gridded offset fields", **intermediate_file_style)
-
     dot.node("process-position_correction", "Offset correction", **process_style)
+    dot.node("interm-corrected_position", "Corrected position data", **intermediate_file_style)
 
     with dot.subgraph(name="cluster_ms_0") as cluster:
         cluster.attr(**metashape_attrs)
-        cluster.node("input-images", "Images", **input_style)
-        cluster.node("interm-corrected_position", "Corrected position data", **intermediate_file_style)
 
         cluster.node("process-image_alignment", "Stereo-pair-wise image alignment", **process_style)
         cluster.node("interm-initial_alignment", "Roughly aligned stereo-pairs", **intermediate_file_style)
@@ -46,6 +47,7 @@ def generate_flowchart():
         cluster.attr(**metashape_attrs)
         cluster.node("process-second_dense_cloud", "Dense cloud generation", **process_style)
         cluster.node("interm-second_dense_cloud", "Dense clouds", **intermediate_file_style)
+
     dot.node("process-dem_generation", "DEM generation", **process_style)
     dot.node("output-dems", "DEMs", **intermediate_file_style)
 
@@ -58,11 +60,16 @@ def generate_flowchart():
     dot.node("interm-offsets", "ICP stats/transforms", **intermediate_file_style)
 
     dot.node("process-evaluation", "DEM quality evaluation", **process_style)
-    dot.node("output-final_dem_combination", "Optimal DEM combination", **output_style)
 
     dot.node("process-raster_transform", "Raster transformation", **process_style)
     dot.node("output-final_dems", "Corrected DEMs", **intermediate_file_style)
-    dot.node("output-final_orthomosaics", "*Corrected orthomosaics", **output_style)
+
+    with dot.subgraph(name="cluster_outputs_0") as cluster:
+        cluster.attr(color="none", label="")
+        cluster.node("output-final_orthomosaics", "*Corrected orthomosaics", **output_style)
+        cluster.node("output-final_dem_combination", "Optimal DEM combination", **output_style)
+
+    # Edges
 
     dot.edge("input-dem", "process-slope_aspect_map")
     dot.edge("process-slope_aspect_map", "interm-slope_aspect_map")
