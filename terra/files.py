@@ -16,7 +16,8 @@ if "SWISSTERRA_INPUT_DIR" in os.environ:
     INPUT_ROOT_DIRECTORY = os.environ["SWISSTERRA_INPUT_DIR"]
 
 # Set the name of the temporary files directory
-TEMP_DIRECTORY = "temp"
+TEMP_DIRECTORY = "temp/"
+MANUAL_INPUT_DIR = "manual_input/"
 
 # Set the names of the input directory names (excluding the root)
 # Note that more directories exist. These are the directories where all filetypes are assumed to be the same.

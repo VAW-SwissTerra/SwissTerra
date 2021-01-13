@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import datetime
 import json
 import os
 import subprocess
@@ -34,7 +35,7 @@ CACHE_FILES = {
     "dem_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg/"),
     "dem_coreg_meta_dir": os.path.join(TEMP_DIRECTORY, "coreg_meta/"),
     "glacier_mask": os.path.join(TEMP_DIRECTORY, "glacier_mask.tif"),
-    "ddem_quality": os.path.join(TEMP_DIRECTORY, "ddem_quality.csv"),
+    "ddem_quality": os.path.join(files.MANUAL_INPUT_DIR, "ddem_quality.csv"),
     "ddem_stats": os.path.join(TEMP_DIRECTORY, "ddem_stats.pkl"),
     "merged_ddem": os.path.join(TEMP_DIRECTORY, "merged_ddem.tif"),
 }
@@ -168,7 +169,7 @@ def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILE
     return ddem
 
 
-def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS.dem_resolution):
+def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS.dem_resolution) -> None:
     """Generate a boolean glacier mask from the 1935 map."""
     # Skip if it already exists
     if not overwrite and os.path.isfile(CACHE_FILES["glacier_mask"]):
@@ -320,7 +321,6 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
     subprocess.run(["gdal_edit.py", "-a_srs", f"EPSG:{dem.crs.to_epsg()}", aligned_dem_path], check=True)
 
     # Count the overlapping pixels.
-    # TODO: Maybe threshold the overlap to remove bad alignments?
     stats["overlap"] = np.count_nonzero(np.isfinite(cropped_reference_dem) & np.isfinite(dem_elevation))
     with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json"), "w") as outfile:
         json.dump(stats, outfile)
@@ -328,7 +328,12 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
     return stats
 
 
-def coregister_all_dems(overwrite: bool = False):
+def coregister_all_dems(overwrite: bool = False) -> None:
+    """
+    Run the coregistration over all of the DEMs created in Metashape.
+
+    :param overwrite: Overwrite existing coregistered DEMs?
+    """
     dem_filepaths = find_dems(CACHE_FILES["metashape_dems_dir"])
 
     os.makedirs(CACHE_FILES["dem_coreg_dir"], exist_ok=True)
@@ -348,9 +353,17 @@ def coregister_all_dems(overwrite: bool = False):
         progress_bar.update()
 
 
-def generate_all_ddems(folder: str = CACHE_FILES["dem_coreg_dir"], out_dir: str = CACHE_FILES["ddems_coreg_dir"]):
+def generate_all_ddems(dem_dir: str = CACHE_FILES["dem_coreg_dir"],
+                       out_dir: str = CACHE_FILES["ddems_coreg_dir"]) -> None:
+    """
+    Generate dDEMs for all DEMs in a directory.
 
-    dem_filepaths = find_dems(folder)
+    The DEMs are compared to the reference 'base_DEM' defined in files.py.
+
+    :param dem_dir: The directory of the DEMs to compare.
+    :param out_dir: The output directory of the dDEMs.
+    """
+    dem_filepaths = find_dems(dem_dir)
     progress_bar = tqdm(total=len(dem_filepaths))
 
     os.makedirs(out_dir, exist_ok=True)
@@ -364,15 +377,20 @@ def generate_all_ddems(folder: str = CACHE_FILES["dem_coreg_dir"], out_dir: str 
         list(executor.map(compare_filepath, dem_filepaths))
 
 
-def read_icp_stats(station_name: str):
+def read_icp_stats(station_name: str) -> dict[str, float]:
+    """
+    Read the ICP coregistration statistics from a specified station name.
+
+    :param station_name: The name of the station, e.g. station_3500.
+    :returns: A dictionary of coregistration statistics.
+    """
 
     with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")) as infile:
         coreg_stats = json.load(infile)
 
+    # Calculate the transformation angle from the transformation matrix
     matrix = np.array(coreg_stats["transform"].replace("\n", " ").split(" ")).astype(float).reshape((4, 4))
-    pytransform3d.transformations.check_transform(matrix)
     quaternion = pytransform3d.transformations.pq_from_transform(matrix)[3:]
-
     angle = np.rad2deg(pytransform3d.rotations.axis_angle_from_quaternion(quaternion)[3])
 
     stats = {"fitness": coreg_stats["fitness"], "overlap": coreg_stats["overlap"], "angle": angle}
@@ -381,6 +399,12 @@ def read_icp_stats(station_name: str):
 
 
 def read_and_crop_glacier_mask(raster: rio.DatasetReader) -> np.ndarray:
+    """
+    Read the glacier mask and crop it to the input raster dataset.
+
+    :param raster: A Rasterio dataset to crop the glacier mask to.
+    :returns: A boolean array with the same dimensions and bounds as the input dataset.
+    """
     bounds = dict(zip(["west", "south", "east", "north"], list(raster.bounds)))
     glacier_mask_dataset = rio.open(CACHE_FILES["glacier_mask"])
     cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds, CONSTANTS.dem_resolution) == 1
@@ -389,141 +413,188 @@ def read_and_crop_glacier_mask(raster: rio.DatasetReader) -> np.ndarray:
     return cropped_glacier_mask
 
 
-def merge_ddems(ddem_filepaths: list[str]):
+def merge_rasters(raster_filepaths: list[str], output_filepath: str = CACHE_FILES["merged_ddem"]) -> None:
+    """
+    Merge multiple GeoTiffs into one file using mean blending.
 
+    IMPORTANT: The GeoTiffs are assumed to be in the same resolution and grid.
+
+    :param raster_filepaths: A list of GeoTiff filepaths to merge.
+    :param output_filepath: The filepath of the output raster.
+    """
+    # Find the maximum bounding box of the rasters.
     bounds: dict[str, float] = {}
+    for filepath in raster_filepaths:
+        raster = rio.open(filepath)
 
-    for filepath in ddem_filepaths:
-        ddem = rio.open(filepath)
+        bounds["west"] = min(bounds.get("west") or 1e22, raster.bounds.left)
+        bounds["east"] = max(bounds.get("east") or -1e22, raster.bounds.right)
+        bounds["south"] = min(bounds.get("south") or 1e22, raster.bounds.bottom)
+        bounds["north"] = max(bounds.get("north") or -1e22, raster.bounds.top)
 
-        bounds["west"] = min(bounds.get("west") or 1e22, ddem.bounds.left)
-        bounds["east"] = max(bounds.get("east") or -1e22, ddem.bounds.right)
-        bounds["south"] = min(bounds.get("south") or 1e22, ddem.bounds.bottom)
-        bounds["north"] = max(bounds.get("north") or -1e22, ddem.bounds.top)
+        raster.close()
 
-        ddem.close()
-
+    # Find the corresponding output shape of the merged raster
     output_shape = (
         int((bounds["north"] - bounds["south"]) / CONSTANTS.dem_resolution),
         int((bounds["east"] - bounds["west"]) / CONSTANTS.dem_resolution),
     )
 
-    merged_ddem = np.zeros(shape=output_shape, dtype=np.float32) - 9999
-    value_count = np.zeros(merged_ddem.shape, dtype=np.uint8)
+    # Generate a new merged raster with only NaN values
+    merged_raster = np.zeros(shape=output_shape, dtype=np.float32)
+    # Generate a similarly shaped count array. This is used for the mean calculation
+    # Values are added to the merged_raster, then divided by the value_count to get the mean
+    value_count = np.zeros(merged_raster.shape, dtype=np.uint8)
 
-    for filepath in tqdm(ddem_filepaths):
-        ddem = rio.open(filepath)
+    for filepath in tqdm(raster_filepaths, desc="Merging rasters"):
+        raster = rio.open(filepath)
 
-        top_index = int((bounds["north"] - ddem.bounds.top) / CONSTANTS.dem_resolution)
-        left_index = int((ddem.bounds.left - bounds["west"]) / CONSTANTS.dem_resolution)
+        # Find the top left pixel index
+        top_index = int((bounds["north"] - raster.bounds.top) / CONSTANTS.dem_resolution)
+        left_index = int((raster.bounds.left - bounds["west"]) / CONSTANTS.dem_resolution)
 
-        ddem_values = ddem.read(1)
-        merged_ddem[top_index:top_index + ddem.height, left_index:left_index + ddem.width] += np.nan_to_num(ddem_values)
-        value_count[top_index:top_index + ddem.height, left_index:left_index +
-                    ddem.width] += np.logical_not(np.isnan(ddem_values)).astype(np.uint8)
+        raster_values = raster.read(1)
+        # Add the raster value to the merged raster
+        merged_raster[top_index:top_index + raster.height,
+                      left_index:left_index + raster.width] += np.nan_to_num(raster_values, nan=0.0)
+        # Increment the value count where the raster values were not NaN
+        value_count[top_index:top_index + raster.height, left_index:left_index +
+                    raster.width] += np.logical_not(np.isnan(raster_values)).astype(np.uint8)
 
-        ddem.close()
+        raster.close()
 
-    merged_ddem[merged_ddem == -9999] = np.nan
-    merged_ddem += 9999
-    merged_ddem /= value_count
+    # Set all cells with no valid values to nan
+    merged_raster[value_count == 0] = np.nan
 
-    merged_ddem[(merged_ddem < -400) | (merged_ddem > 100)] = np.nan
+    # Divide by the value count to get the mean (instead of the sum)
+    merged_raster /= value_count
 
-    transform = rio.transform.from_bounds(**bounds, width=merged_ddem.shape[1], height=merged_ddem.shape[0])
+    # Save the merged raster
+    transform = rio.transform.from_bounds(**bounds, width=merged_raster.shape[1], height=merged_raster.shape[0])
     with rio.open(
-            CACHE_FILES["merged_ddem"],
+            output_filepath,
             mode="w",
             driver="GTiff",
-            width=merged_ddem.shape[1],
-            height=merged_ddem.shape[0],
+            width=merged_raster.shape[1],
+            height=merged_raster.shape[0],
             count=1,
-            crs=rio.open(ddem_filepaths[0]).crs,
+            crs=rio.open(raster_filepaths[0]).crs,
             transform=transform,
-            dtype=merged_ddem.dtype,
+            dtype=merged_raster.dtype,
             nodata=-9999
     ) as raster:
-        raster.write(merged_ddem, 1)
+        raster.write(merged_raster, 1)
 
 
-def examine_ddem(filepath: str):
+def examine_ddem(filepath: str) -> bool:
+    """
+    Examine a dDEM and rate its validity (good, bad or unclear).
 
-    def log_certainty(filepath: str, quality: str):
-
+    :param filepath: The path to the dDEM.
+    :returns: A flag of whether or not the user has pressed the stop button.
+    """
+    def log_quality(quality: str):
+        """Log the given quality value."""
         print(f"Registered {filepath} as {quality}")
 
+        station_name = extract_station_name(filepath)
+        stats = read_icp_stats(station_name)
+        date = datetime.datetime.now()
+
         with open(CACHE_FILES["ddem_quality"], "a+") as outfile:
-            line = f"{filepath},{quality}\n"
+            line = f"{filepath},{quality},{stats['fitness']},{stats['overlap']},{stats['angle']},{date}\n"
             outfile.write(line)
+
+    # Read the dDEM
     ddem = rio.open(filepath)
     ddem_values = ddem.read(1)
-    bounds = dict(zip(["west", "south", "east", "north"], list(ddem.bounds)))
 
+    # Load and crop/resample the glacier mask and reference DEM
+    glacier_mask = read_and_crop_glacier_mask(ddem)
+
+    # Stop button, signalling that the examination is done.
     should_stop = False
 
     def stop(*_):
         nonlocal should_stop
         should_stop = True
 
-    # Load and crop/resample the glacier mask and reference DEM
-    # The glacier mask is converted to a boolean array using the "== 1" comparison.
-    glacier_mask_dataset = rio.open(CACHE_FILES["glacier_mask"])
-    cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds, CONSTANTS.dem_resolution) == 1
-    glacier_mask_dataset.close()
     plt.subplot(111)
-    plt.imshow(cropped_glacier_mask, cmap="Greys_r")
+    plt.imshow(glacier_mask, cmap="Greys_r")
     plt.imshow(ddem_values, cmap="coolwarm_r", vmin=-100, vmax=100)
 
-    axcut = plt.axes([0.9, 0.0, 0.1, 0.075])
-    good_button = matplotlib.widgets.Button(axcut, "Good", )
-    good_button.on_clicked(lambda _: log_certainty(filepath, "good"))
+    good_button = matplotlib.widgets.Button(plt.axes([0.9, 0.0, 0.1, 0.075]), "Good", )
+    good_button.on_clicked(lambda _: log_quality("good"))
 
-    axcut2 = plt.axes([0.8, 0.0, 0.1, 0.075])
-    bad_button = matplotlib.widgets.Button(axcut2, "Bad")
-    bad_button.on_clicked(lambda _: log_certainty(filepath, "bad"))
+    bad_button = matplotlib.widgets.Button(plt.axes([0.8, 0.0, 0.1, 0.075]), "Bad")
+    bad_button.on_clicked(lambda _: log_quality("bad"))
 
-    axcut3 = plt.axes([0.7, 0.0, 0.1, 0.075])
-    unclear_button = matplotlib.widgets.Button(axcut3, "Unclear")
-    unclear_button.on_clicked(lambda _: log_certainty(filepath, "unclear"))
+    unclear_button = matplotlib.widgets.Button(plt.axes([0.7, 0.0, 0.1, 0.075]), "Unclear")
+    unclear_button.on_clicked(lambda _: log_quality("unclear"))
 
-    axcut4 = plt.axes([0.5, 0.0, 0.1, 0.075])
-    stop_button = matplotlib.widgets.Button(axcut4, "Stop")
+    stop_button = matplotlib.widgets.Button(plt.axes([0.5, 0.0, 0.1, 0.075]), "Stop")
     stop_button.on_clicked(stop)
     plt.show()
 
     return should_stop
 
 
-def model_df(data: pd.DataFrame, training_cols: list[str], target_col: str) -> tuple[sklearn.linear_model.LogisticRegression, float]:
+def model_df(data: pd.DataFrame, sample_cols: list[str],
+             target_col: str) -> tuple[sklearn.linear_model.LogisticRegression, float]:
+    """
+    Train a logistic model on a dataframe and return the model + model score.
 
+    The target_col must be boolean.
+
+    :param data: The dataframe to analyse.
+    :param sample_cols: The columns of X values (predictors).
+    :param target_col: The column of y values (targets).
+    :returns: The linear model and its model score.
+    """
+    # Make sure that the target_col is a boolean field
+    data[target_col].astype(bool)
+
+    # Ugly implementation of outlier detection. Kind of works like RANSAC:
+    # Try to estimate the model at most ten times and exclude 10% of the data each time.
+    # Possible outliers therefore have a chance of being excluded, possibly leading to a better model.
+    # Finally, the model with the most valid data is returned.
     models = {}
     for _ in range(10):
         shuffled_data = sklearn.utils.shuffle(data)
 
-        train_test_border = int(shuffled_data.shape[0] * 0.9)
+        # Exclude the last 10% of the shuffled data.
+        exclusion_border = int(shuffled_data.shape[0] * 0.9)
+        shuffled_data = shuffled_data.iloc[:exclusion_border]
 
-        training_data = shuffled_data.iloc[train_test_border:]
-        testing_data = shuffled_data.iloc[:train_test_border]
+        # Warnings may arise here which should just be repressed.
         with warnings.catch_warnings(record=True) as warning_filter:
             warnings.simplefilter("always")
             model = sklearn.linear_model.LogisticRegression(
                 random_state=0, solver='lbfgs', multi_class='ovr', max_iter=300)
+            # Try to fit the model.
             try:
-                model.fit(training_data[training_cols], training_data[target_col])
+                model.fit(shuffled_data[sample_cols], shuffled_data[target_col])
+            # ValueErrors may be raised if the data contain only True's or False's (then try again with other data)
             except ValueError:
                 continue
-            score = model.score(testing_data[training_cols], testing_data[target_col])
+            score = model.score(shuffled_data[sample_cols], shuffled_data[target_col])
 
-            n_good = np.count_nonzero(model.predict(shuffled_data[training_cols]))
+            n_good = np.count_nonzero(model.predict(shuffled_data[sample_cols]))
             models[n_good] = model, score
-
-            if score > 0.9:
-                break
 
     return models[max(models.keys())]
 
 
 def get_ddem_stats(directory: str, redo=False) -> pd.DataFrame:
+    """
+    Calculate statistics from each dDEM in a directory.
+
+    The pixel count, median, 95th percentile, and 5th percentile is calculated for on- and off-glacier surfaces.
+
+    :param directory: The directory of the dDEMs to calculate statistics from.
+    :param redo: Whether to redo the analysis if it has already been made (it takes a while to run)
+    :returns: A dataframe with each of the dDEM's statistics in one row.
+    """
     ddems = find_dems(directory)
 
     if os.path.isfile(CACHE_FILES["ddem_stats"]) and not redo:
@@ -539,6 +610,9 @@ def get_ddem_stats(directory: str, redo=False) -> pd.DataFrame:
 
         for on_off, values in zip(["on", "off"], [ddem_values[glacier_mask], ddem_values[~glacier_mask]]):
             col_names = [f"{on_off}_{stat}" for stat in ["count", "median", "upper", "lower"]]
+            # Return a zero count and 200 as a "nodata" value if there is no on- / off-glacier pixel
+            # The 200 is because these stats are used for regression, and 200 is a bad value
+            # TODO: Handle the "bad values" in a better fashion?
             if np.all(np.isnan(values)):
                 stats.loc[i, col_names] = [0] + [200] * (len(col_names) - 1)
                 continue
@@ -552,19 +626,25 @@ def get_ddem_stats(directory: str, redo=False) -> pd.DataFrame:
     return stats
 
 
-def evaluate_ddems(improve: bool = False):
+def evaluate_ddems(improve: bool = False) -> list[str]:
+    """
+    Train and or run a model to evaluate the quality of the dDEMs, and return a list of the ones deemed good.
 
-    coreg_ddems = np.array(find_dems(CACHE_FILES["ddems_coreg_dir"]))
-
-    np.random.shuffle(coreg_ddems)
-
-    existing_filepaths: list[str] = []
-
-    if os.path.exists(CACHE_FILES["ddem_quality"]):
-        existing_filepaths += list(pd.read_csv(CACHE_FILES["ddem_quality"], header=None).iloc[:, 0])
-
-    stopped = False
+    :param improve: Improve the model?
+    :returns: A list of filepaths to the dDEMs that are deemed good.
+    """
     if improve:
+        coreg_ddems = np.array(find_dems(CACHE_FILES["ddems_coreg_dir"]))
+
+        # Shuffle the data so that dDEMs from different areas come up in succession.
+        np.random.shuffle(coreg_ddems)
+
+        # For the improvement part: Generate a list of dDEMs that have already been looked at.
+        existing_filepaths: list[str] = []
+        if os.path.exists(CACHE_FILES["ddem_quality"]):
+            existing_filepaths += list(pd.read_csv(CACHE_FILES["ddem_quality"])["filepath"])
+
+        stopped = False
         for filepath in coreg_ddems:
             if stopped:
                 break
@@ -573,20 +653,27 @@ def evaluate_ddems(improve: bool = False):
             stopped = examine_ddem(filepath)
             existing_filepaths.append(filepath)
 
-    log = pd.read_csv(CACHE_FILES["ddem_quality"], header=None, names=["filepath", "quality"])\
-        .drop_duplicates("filepath", keep="last")
+    # Read the log of the manually placed dDEM quality flags.
+    log = pd.read_csv(CACHE_FILES["ddem_quality"]).drop_duplicates("filepath", keep="last")
+    # Remove all the ones where the quality was deemed unclear.
     log = log[log["quality"] != "unclear"]
+    # Extract the station name from the filepath.
     log["station_name"] = log["filepath"].apply(extract_station_name)
+    # Make a boolean field of the quality
     log["good"] = log["quality"] == "good"
 
+    # TODO: Why is it shuffled?
     log = sklearn.utils.shuffle(log)
 
-    for i, row in log.iterrows():
-        stats = read_icp_stats(row["station_name"])
-        log.loc[i, list(stats.keys())] = list(stats.values())
+    # Read the ICP coregistration statistics from each respective coregistered DEM
+    # for i, row in log.iterrows():
+    #    stats = read_icp_stats(row["station_name"])
+    #    log.loc[i, list(stats.keys())] = list(stats.values())
 
-    for _ in range(3):
-        model, score = model_df(log, log.columns[4:], "good")
+    # Train a classifier to classify the dDEM quality based on the ICP coregistration statistics.
+    # Try ten times to get a model with a score >= 0.9
+    for _ in range(10):
+        model, score = model_df(log, ["fitness", "overlap", "angle"], "good")
         if score > 0.9:
             break
     else:
@@ -594,28 +681,25 @@ def evaluate_ddems(improve: bool = False):
 
     print(f"Modelled coregistered dDEM usability with an accuracy of: {score:.2f}")
 
+    # Load all of the dDEMs (not just the ones with manuall quality flags)
     all_files = pd.DataFrame(data=find_dems(CACHE_FILES["ddems_coreg_dir"]), columns=["filepath"])
     all_files["station_name"] = all_files["filepath"].apply(extract_station_name)
-    all_files["good"] = np.nan
 
+    # Read the ICP coregistration statistics from each respective coregistered DEM
     for i, row in all_files.iterrows():
-        if row["filepath"] in log["filepath"]:
-            all_files.loc[i, log.columns] = log.loc[row["filepath"] == log["filepath"]].iloc[0]
-            continue
         try:
             stats = read_icp_stats(row["station_name"])
+        # If coregistration failed, it will not have generated a stats file.
         except FileNotFoundError:
             all_files.drop(index=i, inplace=True)
             continue
         all_files.loc[i, list(stats.keys())] = list(stats.values())
 
-    all_files.loc[np.isnan(all_files["good"]), "good"] = model.predict(
-        all_files.loc[np.isnan(all_files["good"]), ["fitness", "overlap", "angle"]])
+    # Use the classifier to classify all dDEMs based on the coregistration quality.
     all_files["good"] = model.predict(all_files[["fitness", "overlap", "angle"]])
 
+    # Find the filepaths corresponding to the dDEMs that were classified as good
     good_filepaths = list(all_files[all_files["good"]]["filepath"].values)
-
-    print(len(good_filepaths))
 
     return good_filepaths
 
@@ -665,16 +749,18 @@ def evaluate_ddems(improve: bool = False):
 
 
 def compute_merged_ddem_stats():
-
+    """
+    Compute and plot statistics from the merged dDEM.
+    """
     ddem_dataset = rio.open(CACHE_FILES["merged_ddem"])
     glacier_mask = read_and_crop_glacier_mask(ddem_dataset)
 
     ddem_values = ddem_dataset.read(1)
     print("Read dDEM and glacier mask")
-    periglacial_values = ddem_values[glacier_mask]
+    periglacial_values = ddem_values[~glacier_mask]
     periglacial_values = periglacial_values[~np.isnan(periglacial_values)]
 
-    #periglacial_values = periglacial_values[np.abs(periglacial_values) < np.percentile(periglacial_values, 99)]
+    periglacial_values = periglacial_values[np.abs(periglacial_values) < np.percentile(periglacial_values, 99)]
 
     print(np.nanmedian(periglacial_values), np.nanstd(periglacial_values))
     plt.hist(periglacial_values, bins=100)
@@ -690,6 +776,7 @@ if __name__ == "__main__":
     # print("Generating dDEMs")
     # generate_all_ddems()
     # generate_all_ddems(CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"])
-    filepaths = evaluate_ddems(improve=False)
-    merge_ddems(filepaths)
-    compute_merged_ddem_stats()
+    filepaths = evaluate_ddems(improve=True)
+    # merge_rasters(filepaths)
+    # compute_merged_ddem_stats()
+    # temp_convert_quality()
