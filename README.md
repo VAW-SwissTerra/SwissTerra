@@ -35,32 +35,24 @@
 ### Data
 The data should either be in a folder/symlink called `input/` in the working directory, or be defined by the environment variable `SWISSTERRA_INPUT_DIR` (which takes precedence over the former).
 
-Run `terra data check` to validate that all files can be located.
+Run `terra files check-inputs` to validate that all files can be located.
 
 ## Usage
 Run `terra -h` to see the how to run the program.
 
-1. Set up a dataset ([see below for instructions](#datasets)), hereby named `DATASET`.
+`DATASET` can either be a specific instrument at a specific year (e.g. `Wild13_1924`. Type `terra processing .` to see every available choice), or `full` for all the data.
 
-2. `terra files check-inputs`: See that all files can be found.
+1. `terra files check-inputs`: See that all files can be found.
+
+2. `terra preprocessing train-fiducials`: Manual intervention. Train the fiducial mark matcher.
 
 3. `terra processing DATASET generate-inputs`: Generate all inputs with default settings.
 
-4. `terra processing DATASET run`: Start the main pipeline.
+4. `terra processing DATASET run`: Start the main photogrammetric pipeline.
 
+TODO: Make a CLI entry point for the script below.
 
-### Datasets
-#### This system below is deprecated and will not work anymore
-A dataset is defined through a `.toml` file in a `datasets/` subfolder of the input main input folder.
-Below is an example of the Rhonegletscher subset, with the path: `$SWISSTERRA_INPUT_DIR/datasets/rhone.toml`:
+5. `python terra/evaluation.py`: Coregister the photogrammetrically created DEMs
 
-```toml
-name = "Rhonegletscher"
-[bounds]
-	left = 671000
-	right = 676000
-	top = 166000
-	bottom = 156000
-```
-Images are subsequently extracted from the bounds specified in the dataset.
-The key used to substitute `DATASET` in [Usage](#usage) is the name of the dataset file without the extension, e.g. `rhone`.
+6. `python terra/evaluation.py`: Generate dDEMs and analyse the result.
+
