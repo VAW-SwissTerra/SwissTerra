@@ -4,73 +4,59 @@ import time
 
 import graphviz
 
+from terra import files
 
-def generate_flowchart():
+EXTERNAL_INPUT_STYLE = dict(fillcolor="skyblue", shape="box", style="filled", fontcolor="black")
+INTERNAL_INPUT_STYLE = dict(fillcolor="plum", style="filled", fontcolor="black")
+INTERMEDIATE_FILE_STYLE = dict(fillcolor="lightgray", style="filled", fontcolor="black")
+PROCESS_STYLE = dict(fillcolor="lightgreen", style="filled", fontcolor="black")
+OUTPUT_STYLE = dict(fillcolor="lightpink", style="filled", fontcolor="black")
+
+
+TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "figures/")
+
+
+def show_dot(dot: graphviz.Digraph):
+    temp_dir = tempfile.TemporaryDirectory()
+    graph_path = os.path.join(temp_dir.name, "graph.gv")
+
+    dot.render(graph_path, view=True)
+    while True:
+        time.sleep(1)
+        continue
+
+
+def preprocessing_flowchart():
     dot = graphviz.Digraph()
 
-    dot.attr(label="* = Not yet implemented", size="8.3,11.7!", ratio="fill")
-    metashape_attrs = dict(color="blue", label="Metashape")
-
-    input_style = dict(fillcolor="skyblue", shape="box", style="filled", fontcolor="black")
-    intermediate_file_style = dict(fillcolor="lightgray", style="filled", fontcolor="black")
-    process_style = dict(fillcolor="lightgreen", style="filled", fontcolor="black")
-    output_style = dict(fillcolor="lightpink", style="filled", fontcolor="black")
+    dot.attr(size="8.3,11.7!", ratio="fill")
 
     with dot.subgraph(name="cluster_inputs_0") as cluster:
         cluster.attr(color="none", label="")
-        cluster.node("input-meta", "Image metadata files", **input_style)
-        cluster.node("input-images", "Images", **input_style)
-        cluster.node("input-dem", "Modern DEM (swissAlti3D)", **input_style)
+        cluster.node("input-meta", "Image metadata files", **EXTERNAL_INPUT_STYLE)
+        cluster.node("input-images", "Images", **EXTERNAL_INPUT_STYLE)
+        cluster.node("input-dem", "Modern DEM (swissAlti3D)", **EXTERNAL_INPUT_STYLE)
+    dot.node("process-slope_aspect_map", "Slope/aspect map generation", **PROCESS_STYLE)
+    dot.node("interm-slope_aspect_map", "Slope/aspect maps", **INTERMEDIATE_FILE_STYLE)
 
-    dot.node("process-slope_aspect_map", "Slope/aspect map generation", **process_style)
-    dot.node("interm-slope_aspect_map", "Slope/aspect maps", **intermediate_file_style)
+    dot.node("process-meta_to_dem_comparison", "Recorded vs. DEM height comparison", **PROCESS_STYLE)
+    dot.node("interm-offset_fields", "X/Y/Z 1x1 km gridded offset fields", **INTERMEDIATE_FILE_STYLE)
+    dot.node("process-position_correction", "Offset correction", **PROCESS_STYLE)
 
-    dot.node("process-meta_to_dem_comparison", "Recorded vs. DEM height comparison", **process_style)
-    dot.node("interm-offset_fields", "X/Y/Z 1x1 km gridded offset fields", **intermediate_file_style)
-    dot.node("process-position_correction", "Offset correction", **process_style)
-    dot.node("interm-corrected_position", "Corrected position data", **intermediate_file_style)
+    dot.node("process-fiducial_marking", "Manual fiducial matching", **PROCESS_STYLE)
+    dot.node("interm-marked_fiducials", "Manual fiducial marks", **INTERMEDIATE_FILE_STYLE)
+    dot.node("process-fiducial_matching", "Supervised fiducial matching", **PROCESS_STYLE)
 
-    with dot.subgraph(name="cluster_ms_0") as cluster:
-        cluster.attr(**metashape_attrs)
-
-        cluster.node("process-image_alignment", "Stereo-pair-wise image alignment", **process_style)
-        cluster.node("interm-initial_alignment", "Roughly aligned stereo-pairs", **intermediate_file_style)
-
-        cluster.node("process-first_dense_cloud", "Dense cloud generation", **process_style)
-        cluster.node("interm-first_dense_cloud", "Initial dense clouds", **intermediate_file_style)
-    dot.node("process-dems_for_coalignment", "DEM generation", **process_style)
-    dot.node("interm-dems_for_coalignment", "DEMs", **intermediate_file_style)
-    dot.node("process-stereo_pair_coalignment", "Inter-stereo-pair coalignment", **process_style)
-    dot.node("interm-coaligned_stereo_pairs", "Coaligned stereo pairs", **intermediate_file_style)
-
-    with dot.subgraph(name="cluster_ms_1") as cluster:
-        cluster.attr(**metashape_attrs)
-        cluster.node("process-second_dense_cloud", "Dense cloud generation", **process_style)
-        cluster.node("interm-second_dense_cloud", "Dense clouds", **intermediate_file_style)
-
-    dot.node("process-dem_generation", "DEM generation", **process_style)
-    dot.node("output-dems", "DEMs", **intermediate_file_style)
-
-    with dot.subgraph(name="cluster_ms_2") as cluster:
-        cluster.attr(**metashape_attrs)
-        cluster.node("process-orthomosaic_generation", "Orthomosaic generation", **process_style)
-        cluster.node("output-orthomosaics", "Orthomosaics", **intermediate_file_style)
-
-    dot.node("process-dem_coregistration", "Stable-ground ICP coregistration", **process_style)
-    dot.node("interm-offsets", "ICP stats/transforms", **intermediate_file_style)
-
-    dot.node("process-evaluation", "DEM quality evaluation", **process_style)
-
-    dot.node("process-raster_transform", "Raster transformation", **process_style)
-    dot.node("output-final_dems", "Corrected DEMs", **intermediate_file_style)
+    dot.node("process-mask_generation", "Image frame\nmask generation", **PROCESS_STYLE)
 
     with dot.subgraph(name="cluster_outputs_0") as cluster:
         cluster.attr(color="none", label="")
-        cluster.node("output-final_orthomosaics", "*Corrected orthomosaics", **output_style)
-        cluster.node("output-final_dem_combination", "Optimal DEM combination", **output_style)
+        cluster.node("output-internal_image_transforms",
+                     "Internal image transforms\n(Fiducial marks)", **OUTPUT_STYLE)
+        cluster.node("output-frame_masks", "Image frame masks", **OUTPUT_STYLE)
+        cluster.node("interm-corrected_position", "Corrected position data", **OUTPUT_STYLE)
 
     # Edges
-
     dot.edge("input-dem", "process-slope_aspect_map")
     dot.edge("process-slope_aspect_map", "interm-slope_aspect_map")
     dot.edge("input-meta", "process-meta_to_dem_comparison")
@@ -81,8 +67,81 @@ def generate_flowchart():
     dot.edge("interm-offset_fields", "process-position_correction")
     dot.edge("process-position_correction", "interm-corrected_position")
 
+    dot.edge("input-images", "process-fiducial_marking")
+    dot.edge("process-fiducial_marking", "interm-marked_fiducials")
+    dot.edge("interm-marked_fiducials", "process-fiducial_matching")
+    dot.edge("input-images", "process-fiducial_matching")
+    dot.edge("process-fiducial_matching", "output-internal_image_transforms")
+
+    dot.edge("input-images", "process-mask_generation")
+    dot.edge("output-internal_image_transforms", "process-mask_generation")
+    dot.edge("process-mask_generation", "output-frame_masks")
+
+    dot.render(os.path.join(TEMP_DIRECTORY, "preprocessing_flowchart"))
+    # show_dot(dot)
+
+
+def processing_flowchart():
+    dot = graphviz.Digraph()
+
+    dot.attr(label="* = Not yet implemented", size="8.3,11.7!", ratio="fill")
+    metashape_attrs = dict(color="blue", label="Metashape")
+
+    with dot.subgraph(name="cluster_inputs_0") as cluster:
+        cluster.attr(color="none", label="")
+        cluster.node("input-images", "Images", **EXTERNAL_INPUT_STYLE)
+        cluster.node("input-corrected_position", "Corrected position data", **INTERNAL_INPUT_STYLE)
+        cluster.node("input-internal_image_transforms",
+                     "Internal image transforms\n(Fiducial marks)", **INTERNAL_INPUT_STYLE)
+        cluster.node("input-frame_masks", "Image frame masks", **INTERNAL_INPUT_STYLE)
+
+    with dot.subgraph(name="cluster_inputs_1") as cluster:
+        cluster.node("input-glacier_mask", "~1935 glacier outlines", **EXTERNAL_INPUT_STYLE)
+        cluster.attr(color="none", label="")
+        cluster.node("input-dem", "Modern DEM (swissAlti3D)", **EXTERNAL_INPUT_STYLE)
+
+    with dot.subgraph(name="cluster_ms_0") as cluster:
+        cluster.attr(**metashape_attrs)
+
+        cluster.node("process-image_alignment", "Stereo-pair-wise image alignment", **PROCESS_STYLE)
+        cluster.node("interm-initial_alignment", "Roughly aligned stereo-pairs", **INTERMEDIATE_FILE_STYLE)
+
+        cluster.node("process-first_dense_cloud", "Dense cloud generation", **PROCESS_STYLE)
+        cluster.node("interm-first_dense_cloud", "Initial dense clouds", **INTERMEDIATE_FILE_STYLE)
+    dot.node("process-dems_for_coalignment", "DEM generation", **PROCESS_STYLE)
+    dot.node("interm-dems_for_coalignment", "DEMs", **INTERMEDIATE_FILE_STYLE)
+    dot.node("process-stereo_pair_coalignment", "Inter-stereo-pair coalignment", **PROCESS_STYLE)
+    dot.node("interm-coaligned_stereo_pairs", "Coaligned stereo pairs", **INTERMEDIATE_FILE_STYLE)
+
+    with dot.subgraph(name="cluster_ms_1") as cluster:
+        cluster.attr(**metashape_attrs)
+        cluster.node("process-second_dense_cloud", "Dense cloud generation", **PROCESS_STYLE)
+        cluster.node("interm-second_dense_cloud", "Dense clouds", **INTERMEDIATE_FILE_STYLE)
+
+    dot.node("process-dem_generation", "DEM generation", **PROCESS_STYLE)
+    dot.node("output-dems", "DEMs", **INTERMEDIATE_FILE_STYLE)
+
+    with dot.subgraph(name="cluster_ms_2") as cluster:
+        cluster.attr(**metashape_attrs)
+        cluster.node("process-orthomosaic_generation", "Orthomosaic generation", **PROCESS_STYLE)
+        cluster.node("output-orthomosaics", "Orthomosaics", **INTERMEDIATE_FILE_STYLE)
+
+    dot.node("process-dem_coregistration", "Stable-ground ICP coregistration", **PROCESS_STYLE)
+    dot.node("interm-offsets", "ICP stats/transforms", **INTERMEDIATE_FILE_STYLE)
+
+    dot.node("process-raster_transform", "Raster transformation", **PROCESS_STYLE)
+
+    with dot.subgraph(name="cluster_outputs_0") as cluster:
+        cluster.attr(color="none", label="")
+        cluster.node("output-final_orthomosaics", "*Corrected orthomosaics", **OUTPUT_STYLE)
+        cluster.node("output-final_dems", "Corrected DEMs", **OUTPUT_STYLE)
+
+    # Edges
+
     dot.edge("input-images", "process-image_alignment")
-    dot.edge("interm-corrected_position", "process-image_alignment")
+    dot.edge("input-corrected_position", "process-image_alignment")
+    dot.edge("input-frame_masks", "process-image_alignment")
+    dot.edge("input-internal_image_transforms", "process-image_alignment")
     dot.edge("process-image_alignment", "interm-initial_alignment")
 
     dot.edge("interm-initial_alignment", "process-first_dense_cloud")
@@ -101,6 +160,7 @@ def generate_flowchart():
     dot.edge("process-orthomosaic_generation", "output-orthomosaics")
 
     dot.edge("output-dems", "process-dem_coregistration")
+    dot.edge("input-glacier_mask", "process-dem_coregistration")
     dot.edge("input-dem", "process-dem_coregistration")
     dot.edge("process-dem_coregistration", "interm-offsets")
 
@@ -110,21 +170,45 @@ def generate_flowchart():
     dot.edge("process-raster_transform", "output-final_dems")
     dot.edge("process-raster_transform", "output-final_orthomosaics")
 
-    dot.edge("output-final_dems", "process-evaluation")
-    dot.edge("output-dems", "process-evaluation")
-    dot.edge("interm-offsets", "process-evaluation")
+    dot.render(os.path.join(TEMP_DIRECTORY, "processing_flowchart"))
+    # show_dot(dot)
 
-    dot.edge("process-evaluation", "output-final_dem_combination")
 
-    print(dot.source)
-    temp_dir = tempfile.TemporaryDirectory()
-    graph_path = os.path.join(temp_dir.name, "graph.gv")
+def evaluation_flowchart():
+    dot = graphviz.Digraph()
 
-    dot.render(graph_path, view=True)
-    while True:
-        time.sleep(1)
-        continue
+    with dot.subgraph(name="cluster_inputs_0") as cluster:
+        cluster.attr(color="none", label="")
+        cluster.node("input-corrected_dems", "Corrected DEMs", **INTERNAL_INPUT_STYLE)
+        cluster.node("input-glacier_mask", "~1935 glacier outlines", **EXTERNAL_INPUT_STYLE)
+        cluster.node("input-dem", "Modern DEM (swissAlti3D)", **EXTERNAL_INPUT_STYLE)
+
+    dot.node("process-ddem_generation", "dDEM generation", **PROCESS_STYLE)
+    dot.node("interm-all_ddems", "dDEMs", **INTERMEDIATE_FILE_STYLE)
+
+    dot.node("process-evaluation", "dDEM quality evaluation", **PROCESS_STYLE)
+
+    dot.node("interm-optimal_ddem_combination", "Optimal dDEM combination", **INTERMEDIATE_FILE_STYLE)
+
+    dot.node("process-ddem_merging", "dDEM merging", **PROCESS_STYLE)
+    dot.node("output-merged_ddem", "Merged dDEM", **OUTPUT_STYLE)
+
+    dot.edge("input-dem", "process-ddem_generation")
+    dot.edge("input-corrected_dems", "process-ddem_generation")
+    dot.edge("process-ddem_generation", "interm-all_ddems")
+
+    dot.edge("interm-all_ddems", "process-evaluation")
+    dot.edge("input-glacier_mask", "process-evaluation")
+    dot.edge("process-evaluation", "interm-optimal_ddem_combination")
+
+    dot.edge("interm-optimal_ddem_combination", "process-ddem_merging")
+    dot.edge("process-ddem_merging", "output-merged_ddem")
+
+    dot.render(os.path.join(TEMP_DIRECTORY, "evaluation_flowchart"))
+    # show_dot(dot)
 
 
 if __name__ == "__main__":
-    generate_flowchart()
+    preprocessing_flowchart()
+    processing_flowchart()
+    evaluation_flowchart()

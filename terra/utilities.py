@@ -1,5 +1,6 @@
 """Python or C-related utility functions."""
 import ctypes
+import datetime
 import io
 import os
 import subprocess
@@ -8,6 +9,11 @@ import tempfile
 import time
 from contextlib import contextmanager
 from typing import Any, Optional
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import sklearn.linear_model
 
 libc = ctypes.CDLL(None)
 c_stdout = ctypes.c_void_p.in_dll(libc, 'stdout')
@@ -102,3 +108,46 @@ def is_gpu_available() -> bool:
         code = os.system("nvidia-smi")
 
     return code == 0
+
+
+def plot_progress():
+
+    ssh_commands = ["ssh", "vierzack07", "cat",
+                    "Projects/ETH/SwissTerra/temp/processing/progress.log", "|", "grep", "DEMs"]
+    text = subprocess.run(ssh_commands, check=True, stdout=subprocess.PIPE, encoding="utf-8").stdout
+
+    data = pd.DataFrame(columns=["date", "dataset", "dems"])
+
+    for i, line in enumerate(text.splitlines()):
+        date_str, dataset, text = line.split(",")
+        date = pd.to_datetime(date_str, format="%Z %Y/%m/%d %H:%M:%S")
+        dems = int(text.replace("Made ", "").replace(" DEMs", ""))
+        data.loc[i] = date, dataset, dems
+
+    data["dems_tot"] = data["dems"].cumsum()
+    data["seconds"] = data["date"].apply(lambda x: float(datetime.datetime.strftime(x, "%s")))
+
+    christmas = datetime.datetime(year=2020, month=12, day=25, tzinfo=datetime.timezone.utc)
+
+    after_christmas = data.loc["2020-12-25":]  # type: ignore
+
+    model = sklearn.linear_model.LinearRegression()
+    model.fit(after_christmas["seconds"].values.reshape(-1, 1), after_christmas["dems_tot"])
+
+    april = datetime.datetime(year=2021, month=4, day=1, tzinfo=datetime.timezone.utc)
+    dems_april = model.predict(np.reshape(datetime.datetime.strftime(april, "%s"), (1, -1)))[0]
+
+    plt.figure(figsize=(6, 4))
+    plt.plot([data.loc[data["date"] > christmas].iloc[0]["date"], april],
+             [data.loc[data["date"] > christmas].iloc[0]["dems_tot"], dems_april])
+    plt.plot(data["date"], data["dems_tot"], linewidth=3)
+
+    plt.xlim(datetime.datetime(2020, 12, 19), datetime.datetime(2021, 3, 20))
+    plt.ylim(0, 2380)
+
+    plt.hlines(2300, *plt.gca().get_xlim(), color="black", linestyles="--")
+    plt.ylabel("Number of DEMs")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    plt.savefig("temp/figures/dem_generation_progress.jpg")
