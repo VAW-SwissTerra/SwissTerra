@@ -785,7 +785,7 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     merged_transforms.estimated_residuals = merged_transforms.manual_residuals.copy()
 
     # Generate a list of filenames that can replace the estimated if needed
-    manually_picked_filenames: list[str] = manual_transforms.keys()
+    manually_picked_filenames: list[str] = list(manual_transforms.keys())
 
     # Loop over all filenames and add the appropriate version (manual/estimated) to merged_transforms
     for i, filename in enumerate(estimated_transforms.keys()):

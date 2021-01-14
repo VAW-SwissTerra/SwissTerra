@@ -4,6 +4,7 @@ import concurrent.futures
 import datetime
 import json
 import os
+import pickle
 import subprocess
 import tempfile
 import warnings
@@ -53,8 +54,8 @@ def extract_station_name(filepath: str) -> str:
     return filepath[filepath.index("station_"):filepath.index("station_") + 12]
 
 
-def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float],
-                  resolution: float, crs: Optional[rio.crs.CRS] = None) -> np.ndarray:
+def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float], resolution: float,
+                  crs: Optional[rio.crs.CRS] = None, resampling=rio.warp.Resampling.cubic_spline) -> np.ndarray:
     """
     Reproject a DEM to the given bounds.
 
@@ -81,7 +82,7 @@ def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float],
         destination=destination,
         src_transform=dem.transform,
         dst_transform=dst_transform,
-        resampling=rio.warp.Resampling.cubic_spline,
+        resampling=resampling,
         src_crs=dem.crs,
         dst_crs=dem.crs if crs is None else crs
     )
@@ -354,7 +355,7 @@ def coregister_all_dems(overwrite: bool = False) -> None:
 
 
 def generate_all_ddems(dem_dir: str = CACHE_FILES["dem_coreg_dir"],
-                       out_dir: str = CACHE_FILES["ddems_coreg_dir"]) -> None:
+                       out_dir: str = CACHE_FILES["ddems_coreg_dir"], overwrite: bool = False) -> None:
     """
     Generate dDEMs for all DEMs in a directory.
 
@@ -364,17 +365,18 @@ def generate_all_ddems(dem_dir: str = CACHE_FILES["dem_coreg_dir"],
     :param out_dir: The output directory of the dDEMs.
     """
     dem_filepaths = find_dems(dem_dir)
-    progress_bar = tqdm(total=len(dem_filepaths))
+    if not overwrite:
+        for filepath in dem_filepaths.copy():
+            output_filepath = os.path.join(out_dir, f"{extract_station_name(filepath)}_ddem.tif")
+            if os.path.isfile(output_filepath):
+                dem_filepaths.remove(filepath)
+
+    if len(dem_filepaths) == 0:
+        return
 
     os.makedirs(out_dir, exist_ok=True)
-
-    def compare_filepath(filepath):
-        """Compare a DEM and update the progress bar."""
+    for filepath in tqdm(dem_filepaths, desc="Generating dDEMs"):
         generate_ddem(filepath, output_dir=out_dir)
-        progress_bar.update()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        list(executor.map(compare_filepath, dem_filepaths))
 
 
 def read_icp_stats(station_name: str) -> dict[str, float]:
@@ -398,7 +400,7 @@ def read_icp_stats(station_name: str) -> dict[str, float]:
     return stats
 
 
-def read_and_crop_glacier_mask(raster: rio.DatasetReader) -> np.ndarray:
+def read_and_crop_glacier_mask(raster: rio.DatasetReader, resampling=rio.warp.Resampling.cubic_spline) -> np.ndarray:
     """
     Read the glacier mask and crop it to the input raster dataset.
 
@@ -407,7 +409,8 @@ def read_and_crop_glacier_mask(raster: rio.DatasetReader) -> np.ndarray:
     """
     bounds = dict(zip(["west", "south", "east", "north"], list(raster.bounds)))
     glacier_mask_dataset = rio.open(CACHE_FILES["glacier_mask"])
-    cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds, CONSTANTS.dem_resolution) == 1
+    cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds,
+                                         CONSTANTS.dem_resolution, resampling=resampling) == 1
     glacier_mask_dataset.close()
 
     return cropped_glacier_mask
@@ -752,31 +755,74 @@ def compute_merged_ddem_stats():
     """
     Compute and plot statistics from the merged dDEM.
     """
-    ddem_dataset = rio.open(CACHE_FILES["merged_ddem"])
-    glacier_mask = read_and_crop_glacier_mask(ddem_dataset)
+    cache_filepath = os.path.join(TEMP_DIRECTORY, "heights_and_glacier_ddem.pkl")
 
-    ddem_values = ddem_dataset.read(1)
-    print("Read dDEM and glacier mask")
-    periglacial_values = ddem_values[~glacier_mask]
-    periglacial_values = periglacial_values[~np.isnan(periglacial_values)]
+    if os.path.isfile(cache_filepath):
+        with open(cache_filepath, "rb") as infile:
+            heights, glacier_vals = pickle.load(infile)
+    else:
+        ddem_dataset = rio.open(CACHE_FILES["merged_ddem"])
+        glacier_mask = read_and_crop_glacier_mask(ddem_dataset, resampling=rio.warp.Resampling.nearest)
+        print("Read glacier mask")
 
-    periglacial_values = periglacial_values[np.abs(periglacial_values) < np.percentile(periglacial_values, 99)]
+        ddem_values = ddem_dataset.read(1)
+        print("Read dDEM")
 
-    print(np.nanmedian(periglacial_values), np.nanstd(periglacial_values))
-    plt.hist(periglacial_values, bins=100)
+        eastings, northings = np.meshgrid(
+            np.linspace(ddem_dataset.bounds.left, ddem_dataset.bounds.right, num=ddem_dataset.width),
+            np.linspace(ddem_dataset.bounds.top, ddem_dataset.bounds.bottom, num=ddem_dataset.height)
+        )
+        glacier_vals = ddem_values[glacier_mask]
+        inlier_mask = ~np.isnan(glacier_vals)
+        glacier_vals = glacier_vals[inlier_mask]
+
+        filtered_eastings = eastings[glacier_mask][inlier_mask]
+        filtered_northings = northings[glacier_mask][inlier_mask]
+
+        assert glacier_vals.shape == filtered_eastings.shape
+
+        dem = rio.open(files.INPUT_FILES["base_DEM"])
+        print("Sampling DEM values...")
+        heights = np.fromiter(dem.sample(zip(filtered_eastings, filtered_northings)), dtype=np.float64)
+        heights[heights < 0] = np.nan
+
+        assert heights.shape == glacier_vals.shape
+
+        with open(cache_filepath, "wb") as outfile:
+            pickle.dump((heights, glacier_vals), outfile)
+
+    old_heights = heights - glacier_vals
+    inlier_mask = (glacier_vals < 100) & (old_heights < CONSTANTS.max_height)
+
+    old_heights = old_heights[inlier_mask]
+    glacier_vals = glacier_vals[inlier_mask]
+
+    count, y_bins, x_bins = np.histogram2d(old_heights, glacier_vals, bins=500)
+
+    plt.imshow(count, extent=(x_bins.min(), x_bins.max(), y_bins.max(), y_bins.min()),
+               cmap="terrain_r", interpolation="bilinear", aspect="auto")
+    plt.ylim(y_bins.min(), y_bins.max())
+
+    plt.ylabel("Elevation (m a.s.l.)")
+    plt.xlabel("Elevation change (m)")
+
+    cbar = plt.colorbar()
+    cbar.set_label("Frequency")
     plt.show()
 
 
-if __name__ == "__main__":
+def main(redo: bool = False):
+    """Run each step from start to finish."""
+    generate_glacier_mask(overwrite=redo)
+    coregister_all_dems(overwrite=redo)
+    generate_all_ddems(overwrite=redo)
 
-    # print("Generating glacier mask")
-    # generate_glacier_mask()
-    # print("Coregistering DEMs")
-    # coregister_all_dems()
-    # print("Generating dDEMs")
-    # generate_all_ddems()
-    # generate_all_ddems(CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"])
-    filepaths = evaluate_ddems(improve=True)
-    # merge_rasters(filepaths)
-    # compute_merged_ddem_stats()
-    # temp_convert_quality()
+    good_ddem_filepaths = evaluate_ddems(improve=False)
+    if redo or not os.path.isfile(CACHE_FILES["merged_ddem"]):
+        merge_rasters(good_ddem_filepaths)
+
+
+if __name__ == "__main__":
+    main()
+
+    compute_merged_ddem_stats()
