@@ -36,10 +36,12 @@ def preprocessing_flowchart():
         cluster.node("input-meta", "Image metadata files", **EXTERNAL_INPUT_STYLE)
         cluster.node("input-images", "Images", **EXTERNAL_INPUT_STYLE)
         cluster.node("input-dem", "Modern DEM (swissAlti3D)", **EXTERNAL_INPUT_STYLE)
+        cluster.node("input-glacier_mask", "~1935 glacier outlines", **EXTERNAL_INPUT_STYLE)
+
     dot.node("process-slope_aspect_map", "Slope/aspect map generation", **PROCESS_STYLE)
     dot.node("interm-slope_aspect_map", "Slope/aspect maps", **INTERMEDIATE_FILE_STYLE)
 
-    dot.node("process-meta_to_dem_comparison", "Recorded vs. DEM height comparison", **PROCESS_STYLE)
+    dot.node("process-meta_to_dem_comparison", "Periglacial recorded vs.\n DEM height comparison", **PROCESS_STYLE)
     dot.node("interm-offset_fields", "X/Y/Z 1x1 km gridded offset fields", **INTERMEDIATE_FILE_STYLE)
     dot.node("process-position_correction", "Offset correction", **PROCESS_STYLE)
 
@@ -62,6 +64,7 @@ def preprocessing_flowchart():
     dot.edge("input-meta", "process-meta_to_dem_comparison")
     dot.edge("interm-slope_aspect_map", "process-meta_to_dem_comparison")
     dot.edge("input-dem", "process-meta_to_dem_comparison")
+    dot.edge("input-glacier_mask", "process-meta_to_dem_comparison")
     dot.edge("process-meta_to_dem_comparison", "interm-offset_fields")
 
     dot.edge("interm-offset_fields", "process-position_correction")
@@ -186,7 +189,7 @@ def evaluation_flowchart():
     dot.node("process-ddem_generation", "dDEM generation", **PROCESS_STYLE)
     dot.node("interm-all_ddems", "dDEMs", **INTERMEDIATE_FILE_STYLE)
 
-    dot.node("process-evaluation", "dDEM quality evaluation", **PROCESS_STYLE)
+    dot.node("process-evaluation", "Supervised dDEM quality evaluation", **PROCESS_STYLE)
 
     dot.node("interm-optimal_ddem_combination", "Optimal dDEM combination", **INTERMEDIATE_FILE_STYLE)
 
