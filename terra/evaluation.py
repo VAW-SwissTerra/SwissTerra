@@ -751,7 +751,36 @@ def evaluate_ddems(improve: bool = False) -> list[str]:
     return output_filepaths
 
 
-def compute_merged_ddem_stats():
+def plot_periglacial_error(show: bool = False):
+    """
+    Compute and plot statistics from the merged dDEM.
+    """
+    ddem_dataset = rio.open(CACHE_FILES["merged_ddem"])
+    glacier_mask = read_and_crop_glacier_mask(ddem_dataset, resampling=rio.warp.Resampling.nearest)
+
+    ddem_values = ddem_dataset.read(1)
+    print("Read dDEM and glacier mask")
+    periglacial_values = ddem_values[~glacier_mask]
+    periglacial_values = periglacial_values[~np.isnan(periglacial_values)]
+
+    periglacial_values = periglacial_values[np.abs(periglacial_values) < np.percentile(periglacial_values, 99)]
+
+    median, std = np.nanmedian(periglacial_values), np.nanstd(periglacial_values)
+    plt.figure(figsize=(5, 3))
+    plt.hist(periglacial_values, bins=100, color="black")
+    plt.text(0.65, 0.8, s=f"Median: {median:.2f} m\nStdev: {std:.2f} m", transform=plt.gca().transAxes)
+    plt.xlabel("Periglacial elevation change (m)")
+    plt.ylabel("Pixel frequency")
+    plt.tight_layout()
+    out_filepath = os.path.join(files.TEMP_DIRECTORY, "figures/periglacial_error.jpg")
+    plt.savefig(out_filepath, dpi=300)
+
+    if show:
+        subprocess.run(["xdg-open", out_filepath], check=True)
+    # plt.show()
+
+
+def plot_global_mb_gradient():
     """
     Compute and plot statistics from the merged dDEM.
     """
@@ -797,17 +826,26 @@ def compute_merged_ddem_stats():
     old_heights = old_heights[inlier_mask]
     glacier_vals = glacier_vals[inlier_mask]
 
-    count, y_bins, x_bins = np.histogram2d(old_heights, glacier_vals, bins=500)
+    step = 200
+    y_bins = np.arange(
+        old_heights.min() - (old_heights.min() % step),
+        old_heights.max() - (old_heights.max() % step) + step,
+        step=step
+    )
+    indices = np.digitize(old_heights, y_bins) - 1
 
-    plt.imshow(count, extent=(x_bins.min(), x_bins.max(), y_bins.max(), y_bins.min()),
-               cmap="terrain_r", interpolation="bilinear", aspect="auto")
-    plt.ylim(y_bins.min(), y_bins.max())
+    plt.boxplot(
+        x=[glacier_vals[indices == index] for index in np.unique(indices)],
+        positions=y_bins + step / 2,
+        vert=False,
+        widths=step / 2,
+        flierprops=dict(alpha=0.2, markersize=0.1),
+        medianprops=dict(color="black"),
+    )
 
-    plt.ylabel("Elevation (m a.s.l.)")
     plt.xlabel("Elevation change (m)")
+    plt.ylabel("Elevation (m a.s.l.)")
 
-    cbar = plt.colorbar()
-    cbar.set_label("Frequency")
     plt.show()
 
 
@@ -818,6 +856,7 @@ def main(redo: bool = False):
     generate_all_ddems(overwrite=redo)
 
     good_ddem_filepaths = evaluate_ddems(improve=False)
+    print(len(good_ddem_filepaths) / len(find_dems(CACHE_FILES["ddems_coreg_dir"])))
     if redo or not os.path.isfile(CACHE_FILES["merged_ddem"]):
         merge_rasters(good_ddem_filepaths)
 
@@ -825,4 +864,4 @@ def main(redo: bool = False):
 if __name__ == "__main__":
     main()
 
-    compute_merged_ddem_stats()
+    # plot_periglacial_error(show=True)
