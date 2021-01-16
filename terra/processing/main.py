@@ -42,7 +42,14 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         print(f"Created new Metashape document for {dataset}")
 
     # Load or create a chunk with all the stereo-pairs
-    chunk = metashape_tools.load_or_remake_chunk(doc, dataset)
+    try:
+        chunk = metashape_tools.load_or_remake_chunk(doc, dataset)
+    except Exception as exception:
+        # This error comes up if no chunks were successfully aligned.
+        if "Empty chunk list" in str(exception):
+            log(dataset, "Alignment not possible")
+            return
+        raise exception
     log(dataset, "Dataset is aligned")
 
     # Get the names of the stereo-pairs

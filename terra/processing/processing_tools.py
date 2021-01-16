@@ -82,13 +82,14 @@ def generate_dem(point_cloud_path: str, output_dem_path: str,
 
 
 def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
-                      parameters: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        parameters: Optional[Dict[str, str]] = None, show_warnings: bool = False) -> Dict[str, Any]:
     """
     Run a PDAL pipeline.
 
     param: pipeline: The pipeline to run.
     param: output_metadata_file: Optional. The filepath for the pipeline metadata.
     param: parameters: Optional. Parameters to fill the pipeline with, e.g. {"FILEPATH": "/path/to/file"}.
+    :param show_warnings: Show the full stdout of the PDAL process.
 
     return: output_meta: The metadata produced by the output.
     """
@@ -111,7 +112,10 @@ def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
 
     # Run PDAL with the pipeline as the stdin
     commands = ["pdal", "pipeline", "--stdin", "--metadata", os.path.join(temp_dir.name, "meta.json")]
-    subprocess.run(commands, input=pipeline, check=True, encoding="utf-8")
+    stdout = subprocess.run(commands, input=pipeline, check=True, stdout=subprocess.PIPE, encoding="utf-8").stdout
+
+    if show_warnings and len(stdout.strip()) != 0:
+        print(stdout)
 
     # Load the temporary metadata file
     with open(os.path.join(temp_dir.name, "meta.json")) as infile:
@@ -337,16 +341,20 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
     ]
     '''
     # Run the pdal pipeline
-    result = run_pdal_pipeline(
-        pipeline=pdal_pipeline,
-        parameters={
-            "REFERENCE_FILEPATH": tempfiles["reference_cropped"],
-            "ALIGNED_FILEPATH": tempfiles["aligned_cropped"],
-            "OUTPUT_FILEPATH": tempfiles["aligned_post_icp"],
-            "RESOLUTION": str(resolution),
-        },
-        output_metadata_file=tempfiles["result_meta"]
-    )["stages"]["filters.icp"]
+    try:
+        result = run_pdal_pipeline(
+            pipeline=pdal_pipeline,
+            parameters={
+                "REFERENCE_FILEPATH": tempfiles["reference_cropped"],
+                "ALIGNED_FILEPATH": tempfiles["aligned_cropped"],
+                "OUTPUT_FILEPATH": tempfiles["aligned_post_icp"],
+                "RESOLUTION": str(resolution),
+            },
+            output_metadata_file=tempfiles["result_meta"]
+        )["stages"]["filters.icp"]
+    except subprocess.CalledProcessError as exception:
+        print(f"Exception reached:\n{exception}")
+        return None
 
     result["composed"] = result["composed"].replace("\n", " ")
 
@@ -433,6 +441,9 @@ def show_processing_log():
         for date, row in processing_log.iterrows():
             print(f"\t{date}\t{row['event']}")
         print(f"Duration: {processing_time}\n")
+
+    n_dems = len([filepath for filepath in os.listdir("export/dems") if ".tif" in filepath])
+    print(f"Currently at {n_dems} DEMs")
 
 
 def is_dataset_finished(dataset: str) -> bool:
