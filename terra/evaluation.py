@@ -10,6 +10,7 @@ import tempfile
 import warnings
 from typing import Any, Optional
 
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import matplotlib.widgets
 import numpy as np
@@ -25,6 +26,7 @@ from tqdm import tqdm
 
 from terra import files
 from terra.constants import CONSTANTS
+from terra.preprocessing import image_meta, outlines
 from terra.processing import inputs, processing_tools
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "evaluation")
@@ -33,12 +35,14 @@ CACHE_FILES = {
     "metashape_dems_dir": os.path.join(inputs.TEMP_DIRECTORY, "output/dems"),
     "ddems_dir": os.path.join(TEMP_DIRECTORY, "ddems/"),
     "ddems_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg_ddems/"),
+    "ddems_yearly_coreg_dir": os.path.join(TEMP_DIRECTORY, "yearly_coreg_ddems/"),
     "dem_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg/"),
     "dem_coreg_meta_dir": os.path.join(TEMP_DIRECTORY, "coreg_meta/"),
-    "glacier_mask": os.path.join(TEMP_DIRECTORY, "glacier_mask.tif"),
     "ddem_quality": os.path.join(files.MANUAL_INPUT_DIR, "ddem_quality.csv"),
     "ddem_stats": os.path.join(TEMP_DIRECTORY, "ddem_stats.pkl"),
     "merged_ddem": os.path.join(TEMP_DIRECTORY, "merged_ddem.tif"),
+    "merged_yearly_ddem": os.path.join(TEMP_DIRECTORY, "merged_yearly_ddem.tif"),
+    "elevation_vs_change_data": os.path.join(TEMP_DIRECTORY, "elevation_vs_change_data.csv"),
 }
 
 
@@ -126,7 +130,9 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
 
     # Open the cropped DEM in rasterio and resample it to fit the bounds perfectly.
     reference_dem = rio.open(temp_dem_path)
-    reference_elevation = reproject_dem(reference_dem, bounds, resolution=resolution)
+    resampling_method = rio.warp.Resampling.cubic_spline if resolution < CONSTANTS.dem_resolution\
+        else rio.warp.Resampling.bilinear
+    reference_elevation = reproject_dem(reference_dem, bounds, resolution=resolution, resampling=resampling_method)
     reference_dem.close()
 
     reference_elevation[reference_elevation > CONSTANTS.max_height] = np.nan
@@ -172,8 +178,9 @@ def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILE
 
 def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS.dem_resolution) -> None:
     """Generate a boolean glacier mask from the 1935 map."""
+    raise DeprecationWarning
     # Skip if it already exists
-    if not overwrite and os.path.isfile(CACHE_FILES["glacier_mask"]):
+    if not overwrite and os.path.isfile(outlines.CACHE_FILES["glacier_mask"]):
         return
     # Get the bounds from the reference DEM
     reference_bounds = json.loads(
@@ -193,21 +200,20 @@ def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS
         "-tr", resolution, resolution,
         "-te", *reference_bounds["lowerLeft"], *reference_bounds["upperRight"],
         files.INPUT_FILES["outlines_1935"],
-        CACHE_FILES["glacier_mask"]
+        outlines.CACHE_FILES["glacier_mask"]
     ]
     subprocess.run(list(map(str, gdal_commands)), check=True, stdout=subprocess.PIPE)
 
     # Unset the nodata value to correctly display in e.g. QGIS
-    subprocess.run(["gdal_edit.py", "-unsetnodata", CACHE_FILES["glacier_mask"]],
+    subprocess.run(["gdal_edit.py", "-unsetnodata", outlines.CACHE_FILES["glacier_mask"]],
                    check=True, stdout=subprocess.PIPE)
 
 
-def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, Any]]:
+def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
     """
     Coregister a DEM to the reference using ICP coregistration.
 
     :param filepath: The filepath of the DEM to be aligned.
-    :param glacier_mask_path: The filepath to the glacier mask to exclude glaciers with.
     :returns: A modified version of the PDAL ICP metadata. Returns None if the process failed.
     """
     dem = rio.open(filepath)
@@ -220,16 +226,13 @@ def coregister_dem(filepath: str, glacier_mask_path: str) -> Optional[dict[str, 
 
     bounds = dict(zip(["west", "south", "east", "north"], list(dem.bounds)))
 
-    # Load and crop/resample the glacier mask and reference DEM
-    # The glacier mask is converted to a boolean array using the "== 1" comparison.
-    glacier_mask_dataset = rio.open(glacier_mask_path)
-    cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds, CONSTANTS.dem_resolution) == 1
-    glacier_mask_dataset.close()
+    # Load and crop/resample the stable ground mask and reference DEM
+    stable_ground_mask = outlines.read_stable_ground_mask(bounds)
     cropped_reference_dem = load_reference_elevation(bounds)
 
-    # Set all glacier values to nan
-    dem_elevation[cropped_glacier_mask] = np.nan
-    cropped_reference_dem[cropped_glacier_mask] = np.nan
+    # Set all non-stable values to nan
+    dem_elevation[~stable_ground_mask] = np.nan
+    cropped_reference_dem[~stable_ground_mask] = np.nan
 
     if np.all(np.isnan(cropped_reference_dem)):
         return None
@@ -340,7 +343,7 @@ def coregister_all_dems(overwrite: bool = False) -> None:
     os.makedirs(CACHE_FILES["dem_coreg_dir"], exist_ok=True)
     os.makedirs(CACHE_FILES["dem_coreg_meta_dir"], exist_ok=True)
 
-    progress_bar = tqdm(total=len(dem_filepaths))
+    progress_bar = tqdm(total=len(dem_filepaths), desc="Coregistering DEMs")
 
     for filepath in dem_filepaths:
         progress_bar.desc = filepath
@@ -350,7 +353,7 @@ def coregister_all_dems(overwrite: bool = False) -> None:
         if not overwrite and os.path.isfile(aligned_dem_path):
             progress_bar.update()
             continue
-        coregister_dem(filepath, CACHE_FILES["glacier_mask"])
+        coregister_dem(filepath)
         progress_bar.update()
 
 
@@ -408,7 +411,7 @@ def read_and_crop_glacier_mask(raster: rio.DatasetReader, resampling=rio.warp.Re
     :returns: A boolean array with the same dimensions and bounds as the input dataset.
     """
     bounds = dict(zip(["west", "south", "east", "north"], list(raster.bounds)))
-    glacier_mask_dataset = rio.open(CACHE_FILES["glacier_mask"])
+    glacier_mask_dataset = rio.open(outlines.CACHE_FILES["glacier_mask"])
     cropped_glacier_mask = reproject_dem(glacier_mask_dataset, bounds,
                                          CONSTANTS.dem_resolution, resampling=resampling) == 1
     glacier_mask_dataset.close()
@@ -751,6 +754,45 @@ def evaluate_ddems(improve: bool = False) -> list[str]:
     return output_filepaths
 
 
+def make_yearly_ddems(overwrite: bool = False):
+
+    ddem_filepaths = find_dems(CACHE_FILES["ddems_coreg_dir"])
+    image_metadata = image_meta.read_metadata()
+    image_metadata["station_number"] = image_metadata["Base number"]\
+        .str.replace("_A", "")\
+        .str.replace("_B", "")\
+            .astype(int)
+
+    os.makedirs(CACHE_FILES["ddems_yearly_coreg_dir"], exist_ok=True)
+    for filepath in tqdm(ddem_filepaths, desc="Making yearly dDEMs"):
+        station_name = extract_station_name(filepath)
+        output_filepath = os.path.join(CACHE_FILES["ddems_yearly_coreg_dir"], f"{station_name}_yearly_ddem.tif")
+        if not overwrite and os.path.isfile(output_filepath):
+            continue
+        station_number = int(station_name.replace("station_", ""))
+        date = image_metadata.loc[image_metadata["station_number"] == station_number, "date"].iloc[0]
+        age_years = (CONSTANTS.base_dem_date - date).total_seconds() / 31556952
+
+        ddem = rio.open(filepath)
+
+        ddem_values = ddem.read(1)
+
+        with rio.open(
+                output_filepath,
+                mode="w",
+                driver="GTiff",
+                width=ddem.width,
+                height=ddem.height,
+                count=1,
+                crs=ddem.crs,
+                transform=ddem.transform,
+                dtype=ddem_values.dtype,
+                nodata=ddem.nodata) as raster:
+            raster.write(ddem_values / age_years, 1)
+
+        ddem.close()
+
+
 def plot_periglacial_error(show: bool = False):
     """
     Compute and plot statistics from the merged dDEM.
@@ -780,7 +822,7 @@ def plot_periglacial_error(show: bool = False):
     # plt.show()
 
 
-def plot_global_mb_gradient():
+def plot_regional_mb_gradient():
     """
     Compute and plot statistics from the merged dDEM.
     """
@@ -790,7 +832,7 @@ def plot_global_mb_gradient():
         with open(cache_filepath, "rb") as infile:
             heights, glacier_vals = pickle.load(infile)
     else:
-        ddem_dataset = rio.open(CACHE_FILES["merged_ddem"])
+        ddem_dataset = rio.open(CACHE_FILES["merged_yearly_ddem"])
         glacier_mask = read_and_crop_glacier_mask(ddem_dataset, resampling=rio.warp.Resampling.nearest)
         print("Read glacier mask")
 
@@ -820,13 +862,13 @@ def plot_global_mb_gradient():
         with open(cache_filepath, "wb") as outfile:
             pickle.dump((heights, glacier_vals), outfile)
 
-    old_heights = heights - glacier_vals
-    inlier_mask = (glacier_vals < 100) & (old_heights < CONSTANTS.max_height)
+    old_heights = heights - glacier_vals * (2018 - 1930)
+    inlier_mask = (glacier_vals < 2) & (old_heights < CONSTANTS.max_height)
 
     old_heights = old_heights[inlier_mask]
     glacier_vals = glacier_vals[inlier_mask]
 
-    step = 200
+    step = 320.0
     y_bins = np.arange(
         old_heights.min() - (old_heights.min() % step),
         old_heights.max() - (old_heights.max() % step) + step,
@@ -834,8 +876,158 @@ def plot_global_mb_gradient():
     )
     indices = np.digitize(old_heights, y_bins) - 1
 
+    box_params = dict(
+        vert=False,
+        flierprops=dict(alpha=0.2, markersize=0.1, zorder=3),
+        medianprops=dict(color="black", zorder=3),
+        zorder=3
+    )
+    hist_params = dict(
+        orientation="horizontal",
+        bins=100,
+        zorder=1,
+        alpha=0.3,
+        histtype="stepfilled",
+        edgecolor="indigo"
+    )
+
+    fig = plt.figure(figsize=(8, 5))
+    ax1 = plt.subplot(121)
+
     plt.boxplot(
         x=[glacier_vals[indices == index] for index in np.unique(indices)],
+        positions=y_bins + step / 2,
+        widths=step / 2,
+        **box_params
+    )
+
+    plt.vlines(0, *plt.gca().get_ylim(), linestyles="--", color="black", zorder=0, alpha=0.5, lw=1)
+    plt.text(0.01, 0.5, "Elevation (m a.s.l.)",
+             transform=fig.transFigure, ha="center", va="center", rotation=90)
+    plt.gca().set_yticklabels([plt.Text(text=f"{tick:.0f}")
+                               for tick in plt.gca().get_yticks()])
+    plt.xlim(-4, 2)
+    plt.xticks([tick for tick in plt.gca().get_xticks() if tick < 2])
+    plt.ylim(y_bins.min() * 0.9, y_bins.max() * 1.1)
+
+    ax2 = plt.gca().twiny()
+    ax2.hist(heights, **hist_params)
+    ax1.set_zorder(ax2.get_zorder()+1)
+    ax1.patch.set_visible(False)
+
+    ax3 = plt.subplot(122)
+    elevation_change = get_normalized_elevation_vs_change()
+    elevation_change = elevation_change[~np.isnan(elevation_change.index.values)]
+
+    heights = elevation_change.index.values
+    elev_change = elevation_change.values
+
+    step = 0.1
+    y_bins = np.arange(
+        heights.min() - (heights.min() % step),
+        heights.max() - (heights.max() % step) + step,
+        step=step
+    )
+    indices = np.digitize(heights, y_bins) - 1
+
+    plt.boxplot(
+        x=[elev_change[indices == index] for index in np.unique(indices)],
+        positions=y_bins + step / 2,
+        widths=step / 2,
+        **box_params
+    )
+
+    plt.vlines(0, *plt.gca().get_ylim(), linestyles="--", color="black", zorder=0, alpha=0.5, lw=1)
+    plt.gca().set_yticklabels(
+        [plt.Text(text=f"{val - step / 2:.1f}–{val + step / 2:.1f}") for val in plt.gca().get_yticks()])
+
+    plt.text(0.99, 0.5, "Normalised elevation ((Z - Zₘᵢₙ) / (Zₘₐₓ - Zₘᵢₙ))",
+             transform=fig.transFigure, ha="center", va="center", rotation=-90)
+
+    plt.ylim(-0.03, 1.03)
+    plt.xlim(-4, 2)
+    plt.gca().yaxis.tick_right()
+
+    ax4 = plt.gca().twiny()
+    ax4.hist(heights, **hist_params)
+    ax3.set_zorder(ax4.get_zorder()+1)
+    ax3.patch.set_visible(False)
+    ax4.set_xlim(*ax4.get_xlim()[::-1])
+
+    plt.text(0.5, 0.99, "Area distribution", transform=fig.transFigure, ha="center", va="top")
+    plt.text(0.5, 0.01, "Elevation change (m · a⁻¹)", transform=fig.transFigure, ha="center")
+
+    plt.subplots_adjust(left=0.08, right=0.90, bottom=0.1, top=0.90, wspace=0.02)
+
+    plt.savefig(os.path.join(files.FIGURE_DIRECTORY, "elevation_vs_dhdt.jpg"), dpi=300)
+
+
+def get_normalized_elevation_vs_change(redo: bool = False) -> pd.Series:
+
+    if not redo and os.path.isfile(CACHE_FILES["elevation_vs_change_data"]):
+        return pd.read_csv(CACHE_FILES["elevation_vs_change_data"], header=None, index_col=0, squeeze=True, dtype=np.float64)
+    glaciers = gpd.read_file(files.INPUT_FILES["outlines_1935"])
+    yearly_ddem = rio.open(CACHE_FILES["merged_yearly_ddem"])
+    full_glacier_mask = rio.open(outlines.CACHE_FILES["glacier_mask"])
+
+    ddem_vals = np.empty(shape=(0, 1), dtype=float)
+    heights = np.empty(shape=(0, 1), dtype=float)
+
+    for _, glacier in tqdm(glaciers.iterrows(), total=glaciers.shape[0]):
+        # Reads the bounds in xmin, ymin, xmax, ymax
+        bounds = glacier.geometry.bounds
+        larger_bounds = np.array([bound - bound % CONSTANTS.dem_resolution for bound in bounds])
+        larger_bounds[[0, 1]] -= CONSTANTS.dem_resolution
+        larger_bounds[[2, 3]] += CONSTANTS.dem_resolution
+        dem_bounds = dict(zip(["west", "south", "east", "north"], larger_bounds))
+
+        ddem = reproject_dem(yearly_ddem, dem_bounds, resolution=CONSTANTS.dem_resolution,
+                             resampling=rio.warp.Resampling.nearest)
+        if np.all(np.isnan(ddem)):
+            continue
+
+        glacier_mask = reproject_dem(full_glacier_mask, dem_bounds,
+                                     resolution=CONSTANTS.dem_resolution, resampling=rio.warp.Resampling.nearest) == 1
+        reference_dem = load_reference_elevation(dem_bounds)
+        valid_mask = ~np.isnan(ddem) & glacier_mask & ~np.isnan(reference_dem)
+        if np.count_nonzero(valid_mask) == 0:
+            continue
+
+        old_heights = reference_dem - (ddem * (2018 - 1930))
+        normalized_heights = (old_heights - np.nanmin(old_heights)) / (np.nanmax(old_heights) - np.nanmin(old_heights))
+
+        ddem_vals = np.append(ddem_vals, ddem[valid_mask])
+        heights = np.append(heights, normalized_heights[valid_mask])
+
+    elevation_change = pd.Series(index=heights, data=ddem_vals)
+
+    elevation_change.to_csv(CACHE_FILES["elevation_vs_change_data"], header=False)
+
+    print(elevation_change)
+
+    yearly_ddem.close()
+
+    return elevation_change
+
+
+def plot_normalized_mb_gradient():
+
+    elevation_change = get_normalized_elevation_vs_change()
+    elevation_change = elevation_change[~np.isnan(elevation_change.index.values)]
+
+    heights = elevation_change.index.values
+    elev_change = elevation_change.values
+
+    step = 0.1
+    y_bins = np.arange(
+        heights.min() - (heights.min() % step),
+        heights.max() - (heights.max() % step) + step,
+        step=step
+    )
+    indices = np.digitize(heights, y_bins) - 1
+
+    plt.boxplot(
+        x=[elev_change[indices == index] for index in np.unique(indices)],
         positions=y_bins + step / 2,
         vert=False,
         widths=step / 2,
@@ -843,25 +1035,43 @@ def plot_global_mb_gradient():
         medianprops=dict(color="black"),
     )
 
-    plt.xlabel("Elevation change (m)")
-    plt.ylabel("Elevation (m a.s.l.)")
+    plt.vlines(0, *plt.gca().get_ylim(), linestyles="--", color="black")
+    plt.gca().set_yticklabels(
+        [plt.Text(text=f"{val - step / 2:.1f}–{val + step / 2:.1f}") for val in plt.gca().get_yticks()])
+
+    plt.xlabel("Elevation change (m / a)")
+    plt.ylabel("Normalized elevation ((Z - Zmin) / (Zmax - Zmin))")
 
     plt.show()
 
 
 def main(redo: bool = False):
     """Run each step from start to finish."""
-    generate_glacier_mask(overwrite=redo)
+    # Generate both the glacier mask and stable ground mask
+    outlines.generate_stable_ground_mask(overwrite=redo)
     coregister_all_dems(overwrite=redo)
     generate_all_ddems(overwrite=redo)
+    make_yearly_ddems(overwrite=redo)
 
     good_ddem_filepaths = evaluate_ddems(improve=False)
-    print(len(good_ddem_filepaths) / len(find_dems(CACHE_FILES["ddems_coreg_dir"])))
+    good_yearly_ddems = [
+        os.path.join(CACHE_FILES["ddems_yearly_coreg_dir"], f"{extract_station_name(filepath)}_yearly_ddem.tif")
+        for filepath in good_ddem_filepaths
+    ]
+    good_ddem_fraction = len(good_ddem_filepaths) / len(find_dems(CACHE_FILES["ddems_coreg_dir"]))
+    print(f"{len(good_ddem_filepaths)} classified as good ({good_ddem_fraction * 100:.2f}%)")
     if redo or not os.path.isfile(CACHE_FILES["merged_ddem"]):
         merge_rasters(good_ddem_filepaths)
 
+    if redo or not os.path.isfile(CACHE_FILES["merged_yearly_ddem"]):
+        merge_rasters(
+            good_yearly_ddems,
+            output_filepath=CACHE_FILES["merged_yearly_ddem"]
+        )
+
 
 if __name__ == "__main__":
-    main()
+    plot_regional_mb_gradient()
+    # plot_normalized_mb_gradient()
 
     # plot_periglacial_error(show=True)

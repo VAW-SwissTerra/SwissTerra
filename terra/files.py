@@ -35,6 +35,7 @@ INPUT_FILES = {
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
     "viewsheds": "shapefiles/V_TERRA_BGDI.shp",
     "base_DEM": "basedata/swissALTI3D_2018_LV03_LN02.tif",
+    "lake_outlines": "shapefiles/swissTLM3D_lakes.shp"
 }
 # Prepend the directory and file paths with the input root directory path.
 INPUT_DIRECTORIES = {key: os.path.join(INPUT_ROOT_DIRECTORY, value) for key, value in INPUT_DIRECTORIES.items()}

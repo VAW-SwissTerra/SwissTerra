@@ -1,5 +1,7 @@
 """Constant parameters that are used throughout the module."""
 
+from datetime import datetime
+
 from terra.utilities import ConstantType
 
 WILD_FIDUCIAL_LOCATIONS: dict[str, tuple[int, int]] = {
@@ -33,6 +35,7 @@ class Constants(ConstantType):  # pylint: disable=R0903
     position_accuracy: float = 2.0  # The assumed position accuracy in m after accounting for spatial systematic shifts
     rotation_accuracy: float = 1.0  # The assumed rotational accuracy in degrees.
     max_height: float = 5000.0  # The highest mountain in the Alps is just less than 5000 m.
+    base_dem_date: datetime = datetime(year=2018, month=8, day=1)  # The date of the base DEM
 
 
 CONSTANTS = Constants()

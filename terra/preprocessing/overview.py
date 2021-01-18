@@ -5,6 +5,7 @@ The output is a csv giving the distance of each photograph to each glacier.
 If the photograph's viewshed does not cover a specific glacier, its distance value will be set to NaN.
 
 """
+import datetime
 import os
 
 import geopandas as gpd
@@ -14,6 +15,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from terra import files
+from terra.preprocessing import image_meta
 
 # Temporary files
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "overview")
@@ -128,7 +130,7 @@ def main(cache: bool = True, max_distance: float = 2500.0, area_fraction: float 
     camera_locations = threshold_camera_distance(camera_locations, max_distance=max_distance)
     # Remove all photographs that (after filtering) do not portray a single glacier
     camera_locations = camera_locations[camera_locations.iloc[:, 24:].any(axis=1)]
-    #camera_locations["V_TERRA_13"].to_csv("temp/swissterra_order_20200907.txt", index=False, header=None)
+    # camera_locations["V_TERRA_13"].to_csv("temp/swissterra_order_20200907.txt", index=False, header=None)
     return camera_locations
 
 
@@ -184,8 +186,15 @@ def get_capture_date_distribution():
     # print(camera_locations[year_column])
 
 
+def plot_year_distribution():
+    image_metadata = image_meta.read_metadata()
+    plt.hist(image_metadata["date"], bins=30, color="black")
+
+    median_date = datetime.datetime.utcfromtimestamp(np.median(image_metadata["date"].astype(np.int64)) / 1e9)
+
+    plt.vlines(median_date, *plt.gca().get_ylim())
+    plt.show()
+
+
 if __name__ == "__main__":
-    # main(cache=True)
-    # get_camera_glacier_viewshed_and_distances_dissolved()
-    get_select_viewsheds()
-    # get_glacier_area_camera_count_relation()
+    plot_year_distribution()
