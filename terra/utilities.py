@@ -135,19 +135,22 @@ def plot_progress():
     model.fit(after_christmas["seconds"].values.reshape(-1, 1), after_christmas["dems_tot"])
 
     april = datetime.datetime(year=2021, month=4, day=1, tzinfo=datetime.timezone.utc)
-    dems_april = model.predict(np.reshape(datetime.datetime.strftime(april, "%s"), (1, -1)))[0]
+    dems_april = model.predict(np.reshape(float(datetime.datetime.strftime(april, "%s")), (1, -1)))[0]
 
     plt.figure(figsize=(6, 4))
     plt.plot([data.loc[data["date"] > christmas].iloc[0]["date"], april],
-             [data.loc[data["date"] > christmas].iloc[0]["dems_tot"], dems_april])
-    plt.plot(data["date"], data["dems_tot"], linewidth=3)
+             [data.loc[data["date"] > christmas].iloc[0]["dems_tot"], dems_april],
+             label="Projection",
+             linestyle=":")
+    plt.plot(data["date"], data["dems_tot"], linewidth=3, label="Progress")
 
     plt.xlim(datetime.datetime(2020, 12, 19), datetime.datetime(2021, 3, 20))
-    plt.ylim(0, 2380)
+    plt.ylim(0, 2400)
 
-    plt.hlines(2300, *plt.gca().get_xlim(), color="black", linestyles="--")
+    plt.hlines(2300, *plt.gca().get_xlim(), color="black", linestyles="--", label="Target")
     plt.ylabel("Number of DEMs")
+    plt.legend(loc="lower right")
     plt.xticks(rotation=45)
     plt.tight_layout()
 
-    plt.savefig("temp/figures/dem_generation_progress.jpg")
+    plt.savefig("temp/figures/dem_generation_progress.jpg", dpi=300)

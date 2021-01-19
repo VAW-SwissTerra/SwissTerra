@@ -99,7 +99,7 @@ def processing_flowchart():
         cluster.node("input-frame_masks", "Image frame masks", **INTERNAL_INPUT_STYLE)
 
     with dot.subgraph(name="cluster_inputs_1") as cluster:
-        cluster.node("input-glacier_mask", "~1935 glacier outlines", **EXTERNAL_INPUT_STYLE)
+        cluster.node("input-glacier_mask", "Stable terrain mask", **EXTERNAL_INPUT_STYLE)
         cluster.attr(color="none", label="")
         cluster.node("input-dem", "Modern DEM (swissAlti3D)", **EXTERNAL_INPUT_STYLE)
 
@@ -179,6 +179,7 @@ def processing_flowchart():
 
 def evaluation_flowchart():
     dot = graphviz.Digraph()
+    dot.attr(label="* = Not yet implemented/finished")
 
     with dot.subgraph(name="cluster_inputs_0") as cluster:
         cluster.attr(color="none", label="")
@@ -193,8 +194,14 @@ def evaluation_flowchart():
 
     dot.node("interm-optimal_ddem_combination", "Optimal dDEM combination", **INTERMEDIATE_FILE_STYLE)
 
-    dot.node("process-ddem_merging", "dDEM merging", **PROCESS_STYLE)
-    dot.node("output-merged_ddem", "Merged dDEM", **OUTPUT_STYLE)
+    dot.node("process-ddem_merging", "Yearly dDEM conversion\nand merging", **PROCESS_STYLE)
+    dot.node("interm-merged_ddem", "Merged yearly dDEM\nwith gaps", **INTERMEDIATE_FILE_STYLE)
+    dot.node("process-gap_filling", "dDEM gap filling*", **PROCESS_STYLE)
+    dot.node("interm-gap_filled_ddem", "Gap-filled merged yearly dDEM*", **INTERMEDIATE_FILE_STYLE)
+
+    dot.node("process-glacier_change_calculation", "Glacier change calculations*", **PROCESS_STYLE)
+    dot.node("output-glacier_specific_change", "Glacier-specific\nvolume change*", **OUTPUT_STYLE)
+    dot.node("output-swiss_wide_hypsometry_change", "Swiss-wide volume- and\nhypsometric change*", **OUTPUT_STYLE)
 
     dot.edge("input-dem", "process-ddem_generation")
     dot.edge("input-corrected_dems", "process-ddem_generation")
@@ -205,7 +212,15 @@ def evaluation_flowchart():
     dot.edge("process-evaluation", "interm-optimal_ddem_combination")
 
     dot.edge("interm-optimal_ddem_combination", "process-ddem_merging")
-    dot.edge("process-ddem_merging", "output-merged_ddem")
+    dot.edge("process-ddem_merging", "interm-merged_ddem")
+    dot.edge("interm-merged_ddem", "process-gap_filling")
+    dot.edge("process-gap_filling", "interm-gap_filled_ddem")
+
+    dot.edge("input-glacier_mask", "process-glacier_change_calculation")
+    dot.edge("input-dem", "process-glacier_change_calculation")
+    dot.edge("interm-gap_filled_ddem", "process-glacier_change_calculation")
+    dot.edge("process-glacier_change_calculation", "output-glacier_specific_change")
+    dot.edge("process-glacier_change_calculation", "output-swiss_wide_hypsometry_change")
 
     dot.render(os.path.join(TEMP_DIRECTORY, "evaluation_flowchart"))
     # show_dot(dot)
