@@ -30,10 +30,22 @@
 
 	Make sure that the correct conda environment is activated before running this step.
 
-3. 	Make sure to set up the `agisoft_LICENSE` environment variable to point to `metashape.lic` in the Metashape installation folder.
+3. 	Set up the `agisoft_LICENSE` environment variable to point to `metashape.lic` in the Metashape installation directory.
 
 ### Data
-The data should either be in a folder/symlink called `input/` in the working directory, or be defined by the environment variable `SWISSTERRA_INPUT_DIR` (which takes precedence over the former).
+The data should either be in a directory/symlink called `input/` in the working directory, or be defined by the environment variable `SWISSTERRA_INPUT_DIR` (which takes precedence over the former).
+
+* `input/images/*.tif`: The directory/symlink with the input images.
+* `input/image_metadata/*.txt`: The directory/symlink with the image metadata text files.
+* `input/basedata/swissALTI3D_2018_LV03_LN02.tif`: A non-free DEM mosaic from 2011--2017 ([swisstopo, 2018](https://shop.swisstopo.admin.ch/de/products/height_models/alti3D)).
+* `input/shapefiles/swissTLM3D_lakes.shp`: Lakes from a non-free land-use map ([swisstopo, 2020](https://shop.swisstopo.admin.ch/en/products/landscape/tlm3D)).
+* `input/shapefiles/Glacierarea_1935_split.shp`: Glacier outlines from ~1935 ([Freudiger et al., 2018](https://doi.org/10.6094/UNIFR/15008)).
+
+The files below are only needed for the `terra overview` functionality:
+
+* `input/shapefiles/SGI_1973.shp`: Glacier outlines from 1973 ([Müller et al., 1976](https://doi.glamos.ch/data/inventory/inventory_sgi1973_r1976.zip)).
+* `input/shapefiles/V_TERRA_BGDI.shp`: Image viewshed polygons (swisstopo).
+* `input/shapefiles/V_TERRA_VIEWSHED_PARAMS.shp`: Image location points (swisstopo). (TODO: could be replaced with the metadata files)
 
 Run `terra files check-inputs` to validate that all files can be located.
 
