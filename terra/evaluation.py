@@ -24,7 +24,7 @@ import sklearn.linear_model
 import sklearn.utils
 from tqdm import tqdm
 
-from terra import files
+from terra import base_dem, files
 from terra.constants import CONSTANTS
 from terra.preprocessing import image_meta, outlines
 from terra.processing import inputs, processing_tools
@@ -123,7 +123,7 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
         larger_bounds["north"],
         larger_bounds["east"],
         larger_bounds["south"],
-        files.INPUT_FILES["base_DEM"],
+        base_dem.CACHE_FILES["base_dem"],
         temp_dem_path
     ]
     subprocess.run(list(map(str, gdal_commands)), check=True, stdout=subprocess.PIPE)
@@ -185,7 +185,7 @@ def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS
     # Get the bounds from the reference DEM
     reference_bounds = json.loads(
         subprocess.run(
-            ["gdalinfo", "-json", files.INPUT_FILES["base_DEM"]],
+            ["gdalinfo", "-json", base_dem.CACHE_FILES["base_dem"]],
             check=True,
             stdout=subprocess.PIPE
         ).stdout
@@ -852,7 +852,7 @@ def plot_regional_mb_gradient():
 
         assert glacier_vals.shape == filtered_eastings.shape
 
-        dem = rio.open(files.INPUT_FILES["base_DEM"])
+        dem = rio.open(base_dem.CACHE_FILES["base_dem"])
         print("Sampling DEM values...")
         heights = np.fromiter(dem.sample(zip(filtered_eastings, filtered_northings)), dtype=np.float64)
         heights[heights < 0] = np.nan

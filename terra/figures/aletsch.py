@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import rasterio as rio
 
-from terra import evaluation, files
+from terra import base_dem, evaluation, files
 from terra.constants import CONSTANTS
 
 
@@ -48,7 +48,8 @@ def plot_aletsch():
     base_dem_path = os.path.join(temp_dir.name, "base_dem.tif")
     ddem_path = os.path.join(temp_dir.name, "ddem.tif")
 
-    base_dem = crop_geotiff(files.INPUT_FILES["base_DEM"], base_dem_path, bounds, resolution=CONSTANTS.dem_resolution)
+    base_dem = crop_geotiff(base_dem.CACHE_FILES["base_dem"], base_dem_path,
+                            bounds, resolution=CONSTANTS.dem_resolution)
     base_dem_dataset = rio.open(base_dem_path)
     hillshade = earthpy.spatial.hillshade(base_dem) / 255
 

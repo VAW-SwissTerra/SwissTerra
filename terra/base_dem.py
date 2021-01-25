@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 
@@ -10,8 +11,19 @@ import rasterio as rio
 import rasterio.features
 import rasterio.fill
 import scipy.interpolate
+import shapely
 
+from terra import evaluation, files
 from terra.constants import CONSTANTS
+
+TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "base_dem")
+
+
+CACHE_FILES = {
+    "base_dem": os.path.join(TEMP_DIRECTORY, "base_dem.tif"),
+    "base_dem_years": os.path.join(TEMP_DIRECTORY, "base_dem_years.tif"),
+    "template_raster": evaluation.CACHE_FILES["merged_ddem"],
+}
 
 
 def read_metadata():
@@ -25,19 +37,18 @@ def read_metadata():
         counts = np.array(row["yr_cnt_his"].split(",")).astype(float)
         average_year = np.average(years[~np.isnan(years)], weights=counts[~np.isnan(years)])
         return average_year
-
     data["mean_year"] = data.apply(mean_year, axis=1)
-    data.to_file("/tmp/shapefile.shp")
     return data
 
 
 def rasterize_year():
-    #data = read_metadata()
-    data = gpd.read_file("/tmp/shapefile.shp")
-    # this is where we create a generator of geom, value pairs to use in rasterizing
-    shapes = ((geom, value) for geom, value in zip(data.geometry, data["mean_year"]))
+    data = read_metadata()
 
-    template_raster = rio.open("temp/evaluation/merged_ddem.tif")
+    temp_dir = tempfile.TemporaryDirectory()
+    data_temp_path = os.path.join(temp_dir.name, "data.shp")
+    data.to_file(data_temp_path)
+
+    template_raster = rio.open(CACHE_FILES["base_dem"])
 
     gdal_commands = ["gdal_grid",
                      "-txe", template_raster.bounds.left, template_raster.bounds.right,
@@ -46,24 +57,43 @@ def rasterize_year():
                      "-a_srs", CONSTANTS.crs_epsg.replace("::", ":"),
                      "-zfield", "mean_year",
                      "-a", "nearest:radius1=0.0:radius2=0.0:angle=0.0:nodata=0.0",
+                     "-co", "COMPRESS=DEFLATE",
+                     "-ot", "Float32",
                      "--config", "GDAL_NUM_THREADS=ALL_CPUS",
-                     "/tmp/shapefile.shp",
-                     "/tmp/rasterized.tif"]
+                     data_temp_path,
+                     CACHE_FILES["base_dem_years"]]
     subprocess.run(list(map(str, gdal_commands)), check=True)
 
-    return
 
-    rasterized_years = rio.features.rasterize(
-        shapes,
-        out_shape=template_raster.shape,
-        transform=template_raster.transform,
-        fill=np.nan)
+def reproject_base_dem():
 
-    meta = template_raster.meta
+    orig_dem = rio.open(files.INPUT_FILES["base_DEM"])
 
-    with rio.open("/tmp/raster.tif", "w", **meta) as raster:
-        raster.write(rasterized_years, 1)
+    bounds = gpd.GeoDataFrame(index=[0, 1], geometry=[
+        shapely.geometry.Point([orig_dem.bounds.left, orig_dem.bounds.top]),
+        shapely.geometry.Point([orig_dem.bounds.right, orig_dem.bounds.bottom])],
+        crs=orig_dem.crs).to_crs(CONSTANTS.crs_epsg.replace("::", ":"))
+
+    left, right = bounds.geometry.x - (bounds.geometry.x % CONSTANTS.dem_resolution)
+    top, bottom = bounds.geometry.y - (bounds.geometry.y % CONSTANTS.dem_resolution)
+
+    gdal_bounds = [left, bottom, right + CONSTANTS.dem_resolution, top + CONSTANTS.dem_resolution]
+
+    gdal_commands = ["gdalwarp",
+                     "-t_srs", CONSTANTS.crs_epsg.replace("::", ":"),
+                     "-tr", CONSTANTS.dem_resolution, CONSTANTS.dem_resolution,
+                     "-te", *gdal_bounds,
+                     "-te_srs", CONSTANTS.crs_epsg.replace("::", ":"),
+                     "-co", "COMPRESS=DEFLATE",
+                     "-co", "BIGTIFF=YES",
+                     "-r", "bilinear",
+                     "-wo", "NUM_THREADS=ALL_CPUS",
+                     "-multi",
+                     files.INPUT_FILES["base_DEM"],
+                     CACHE_FILES["base_dem"]]
+
+    subprocess.run(list(map(str, gdal_commands)), check=True)
 
 
 if __name__ == "__main__":
-    rasterize_year()
+    reproject_base_dem()

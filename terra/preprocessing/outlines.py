@@ -10,7 +10,7 @@ import geopandas as gpd
 import numpy as np
 import rasterio as rio
 
-from terra import files
+from terra import base_dem, files
 from terra.constants import CONSTANTS
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "preprocessing/")
@@ -29,7 +29,7 @@ def rasterize_outlines(input_filepath: str, output_filepath: str, overwrite: boo
     # Get the bounds from the reference DEM
     reference_bounds = json.loads(
         subprocess.run(
-            ["gdalinfo", "-json", files.INPUT_FILES["base_DEM"]],
+            ["gdalinfo", "-json", base_dem.CACHE_FILES["base_dem"]],
             check=True,
             stdout=subprocess.PIPE
         ).stdout

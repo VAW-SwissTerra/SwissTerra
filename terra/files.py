@@ -34,7 +34,7 @@ INPUT_FILES = {
     "outlines_1935": "shapefiles/Glacierarea_1935_fixed.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
     "viewsheds": "shapefiles/V_TERRA_BGDI.shp",
-    "base_DEM": "basedata/swissALTI3D_2018_LV03_LN02.tif",
+    "base_DEM": "basedata/swissALTI3D_pr2019_LV95.tif",
     "lake_outlines": "shapefiles/swissTLM3D_lakes.shp"
 }
 # Prepend the directory and file paths with the input root directory path.
