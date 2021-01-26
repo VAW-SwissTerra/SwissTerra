@@ -48,10 +48,10 @@ def plot_aletsch():
     base_dem_path = os.path.join(temp_dir.name, "base_dem.tif")
     ddem_path = os.path.join(temp_dir.name, "ddem.tif")
 
-    base_dem = crop_geotiff(base_dem.CACHE_FILES["base_dem"], base_dem_path,
-                            bounds, resolution=CONSTANTS.dem_resolution)
+    base_dem_values = crop_geotiff(base_dem.CACHE_FILES["base_dem"], base_dem_path,
+                                   bounds, resolution=CONSTANTS.dem_resolution)
     base_dem_dataset = rio.open(base_dem_path)
-    hillshade = earthpy.spatial.hillshade(base_dem) / 255
+    hillshade = earthpy.spatial.hillshade(base_dem_values) / 255
 
     ddem = crop_geotiff(evaluation.CACHE_FILES["merged_ddem"], ddem_path,
                         bounds=bounds, resolution=CONSTANTS.dem_resolution)

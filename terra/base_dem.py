@@ -13,7 +13,7 @@ import rasterio.fill
 import scipy.interpolate
 import shapely
 
-from terra import evaluation, files
+from terra import files
 from terra.constants import CONSTANTS
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "base_dem")
@@ -22,7 +22,6 @@ TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "base_dem")
 CACHE_FILES = {
     "base_dem": os.path.join(TEMP_DIRECTORY, "base_dem.tif"),
     "base_dem_years": os.path.join(TEMP_DIRECTORY, "base_dem_years.tif"),
-    "template_raster": evaluation.CACHE_FILES["merged_ddem"],
 }
 
 
