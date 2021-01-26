@@ -1,6 +1,7 @@
 """Analyse and plot the distribution of different instruments in the dataset."""
 from __future__ import annotations
 
+import datetime
 import os
 
 import cv2
@@ -11,6 +12,10 @@ import pandas as pd
 from terra import files, preprocessing
 from terra.constants import CONSTANTS
 from terra.preprocessing import image_meta, manual_picking
+
+CACHE_FILES = {
+    "instrument_year_histogram": os.path.join(files.FIGURE_DIRECTORY, "instrument_year_histogram.jpg")
+}
 
 
 def get_instrument_names() -> np.ndarray:
@@ -149,6 +154,20 @@ def show_different_frame_types():
     plt.savefig("temp/figures/wild_frame_types.jpg", dpi=300)
     plt.show()
     print(unique_frames)
+
+
+def plot_year_distribution():
+    image_metadata = image_meta.read_metadata()
+    plt.figure(figsize=(8, 5))
+    plt.hist(image_metadata["date"], bins=30, color="black")
+
+    median_date = datetime.datetime.utcfromtimestamp(np.median(image_metadata["date"].astype(np.int64)) / 1e9)
+
+    plt.vlines(median_date, *plt.gca().get_ylim(), color="red")
+    plt.annotate(f"{median_date.year}", (median_date, plt.gca().get_ylim()[1] * 0.97), ha="center")
+    plt.xlabel("Capture date")
+    plt.tight_layout()
+    plt.savefig(CACHE_FILES["instrument_year_histogram"], dpi=300)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import subprocess
 import tempfile
@@ -15,10 +16,16 @@ import rasterio as rio
 from terra import base_dem, evaluation, files
 from terra.constants import CONSTANTS
 
+CACHE_FILES = {
+    "aletsch_example": os.path.join(files.FIGURE_DIRECTORY, "aletsch_example.jpg"),
+    "aletsch_ortho": os.path.join(files.FIGURE_DIRECTORY, "aletsch_ortho.jpg")
+}
+
 
 def crop_geotiff(filepath: str, output_filepath: str, bounds: dict[str, int], resolution: float) -> np.ndarray:
     gdal_commands = [
         "gdal_translate",
+        "-q",
         "-projwin",
         bounds["west"],
         bounds["north"],
@@ -38,11 +45,16 @@ def crop_geotiff(filepath: str, output_filepath: str, bounds: dict[str, int], re
         return raster.read(1)
 
 
-def plot_aletsch():
-
+def get_aletsch_bounds() -> dict[str, int]:
     bounds = {"west": 643000, "north": 141000}
     bounds["east"] = bounds["west"] + 5000
     bounds["south"] = bounds["north"] - 5000
+
+    return bounds
+
+
+def plot_aletsch():
+    bounds = get_aletsch_bounds()
 
     temp_dir = tempfile.TemporaryDirectory()
     base_dem_path = os.path.join(temp_dir.name, "base_dem.tif")
@@ -139,7 +151,54 @@ def plot_aletsch():
 
     plt.subplots_adjust(left=0.05, bottom=0.18, right=0.92, top=0.94, wspace=0.01, hspace=0.01)
 
-    plt.savefig(os.path.join(files.FIGURE_DIRECTORY, "aletsch_example.jpg"), dpi=300)
+    plt.savefig(CACHE_FILES["aletsch_example"], dpi=300)
+
+
+def aletsch_ortho():
+    bounds = get_aletsch_bounds()
+    bounds["south"] += int((bounds["north"] - bounds["south"]) / 2)
+
+    bounds["south"] -= 1000
+    bounds["north"] -= 1000
+
+    def is_in_bounds(filepath: str) -> bool:
+        dataset = rio.open(filepath)
+
+        if dataset.bounds.left > bounds["east"]:
+            return False
+        if dataset.bounds.right < bounds["west"]:
+            return False
+        if dataset.bounds.bottom > bounds["north"]:
+            return False
+        if dataset.bounds.top < bounds["south"]:
+            return False
+
+        return True
+
+    ortho_filepaths = np.array([os.path.join("temp/processing/output/orthos/", filename)
+                                for filename in os.listdir("temp/processing/output/orthos/") if filename.endswith(".tif")])
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        inliers = np.fromiter(executor.map(is_in_bounds, ortho_filepaths), dtype=bool)
+
+    temp_dir = tempfile.TemporaryDirectory()
+
+    out_arr = np.zeros(shape=(bounds["north"] - bounds["south"], bounds["east"] - bounds["west"]))
+
+    for filepath in ortho_filepaths[inliers]:
+        temp_filepath = os.path.join(temp_dir.name, os.path.basename(filepath))
+
+        vals = crop_geotiff(filepath, temp_filepath, bounds=bounds, resolution=1)
+        assert out_arr.shape == vals.shape
+        out_arr[vals != 0] = vals[vals != 0]
+
+    merged_image = np.ma.masked_array(data=out_arr, mask=out_arr == 0)
+
+    merged_image = np.clip(merged_image - np.percentile(merged_image, 27.5), 0, 255)
+    merged_image *= (255 / merged_image.max())
+
+    merged_image_to_save = merged_image.filled(fill_value=255).astype(np.uint8)
+    cv2.imwrite(CACHE_FILES["aletsch_ortho"], merged_image_to_save)
 
 
 if __name__ == "__main__":

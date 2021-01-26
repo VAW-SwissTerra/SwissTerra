@@ -22,6 +22,7 @@ TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "base_dem")
 CACHE_FILES = {
     "base_dem": os.path.join(TEMP_DIRECTORY, "base_dem.tif"),
     "base_dem_years": os.path.join(TEMP_DIRECTORY, "base_dem_years.tif"),
+    "hillshade": os.path.join(TEMP_DIRECTORY, "base_dem_hillshade.tif")
 }
 
 
@@ -90,6 +91,22 @@ def reproject_base_dem():
                      "-multi",
                      files.INPUT_FILES["base_DEM"],
                      CACHE_FILES["base_dem"]]
+
+    subprocess.run(list(map(str, gdal_commands)), check=True)
+
+
+def make_hillshade(overwrite: bool = False):
+
+    if not overwrite and os.path.isfile(CACHE_FILES["hillshade"]):
+        return
+
+    gdal_commands = [
+        "gdaldem", "hillshade",
+        "-co", "COMPRESS=DEFLATE",
+        "-multidirectional",
+        CACHE_FILES["base_dem"],
+        CACHE_FILES["hillshade"]
+    ]
 
     subprocess.run(list(map(str, gdal_commands)), check=True)
 
