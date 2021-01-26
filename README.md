@@ -32,12 +32,13 @@
 
 3. 	Set up the `agisoft_LICENSE` environment variable to point to `metashape.lic` in the Metashape installation directory.
 
-### Data
+### Required data
 The data should either be in a directory/symlink called `input/` in the working directory, or be defined by the environment variable `SWISSTERRA_INPUT_DIR` (which takes precedence over the former).
 
 * `input/images/*.tif`: The directory/symlink with the input images.
 * `input/image_metadata/*.txt`: The directory/symlink with the image metadata text files.
-* `input/basedata/swissALTI3D_2018_LV03_LN02.tif`: A non-free DEM mosaic from 2011--2017 ([swisstopo, 2018](https://shop.swisstopo.admin.ch/de/products/height_models/alti3D)).
+* `input/basedata/swissALTI3D_pr2019_LV95.tif`: A non-free DEM mosaic from 2011--2019 ([swisstopo, 2019](https://shop.swisstopo.admin.ch/de/products/height_models/alti3D)).
+* `input/shapefiles/swissALTI3D_Metatatenlayer_032019/Metadata_SwissALTI3D_preRelease2019_LV95.shp`: Metadata on the approximate capture dates of the DEM mosaic.
 * `input/shapefiles/swissTLM3D_lakes.shp`: Lakes from a non-free land-use map ([swisstopo, 2020](https://shop.swisstopo.admin.ch/en/products/landscape/tlm3D)).
 * `input/shapefiles/Glacierarea_1935_split.shp`: Glacier outlines from ~1935 ([Freudiger et al., 2018](https://doi.org/10.6094/UNIFR/15008)).
 
