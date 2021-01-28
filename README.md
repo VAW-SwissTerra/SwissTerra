@@ -41,6 +41,7 @@ The data should either be in a directory/symlink called `input/` in the working 
 * `input/shapefiles/swissALTI3D_Metatatenlayer_032019/Metadata_SwissALTI3D_preRelease2019_LV95.shp`: Metadata on the approximate capture dates of the DEM mosaic.
 * `input/shapefiles/swissTLM3D_lakes.shp`: Lakes from a non-free land-use map ([swisstopo, 2020](https://shop.swisstopo.admin.ch/en/products/landscape/tlm3D)).
 * `input/shapefiles/Glacierarea_1935_split.shp`: Glacier outlines from ~1935 ([Freudiger et al., 2018](https://doi.org/10.6094/UNIFR/15008)).
+* `input/shapefiles/inventory_sgi2016_r2020/SGI_2016_glaciers.shp`: Modern glacier outlines ([GLAMOS, 2020](https://doi.glamos.ch/data/inventory/inventory_sgi2016_r2020.html)).
 
 The files below are only needed for the `terra overview` functionality:
 
