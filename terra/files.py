@@ -31,11 +31,13 @@ INPUT_FILES = {
     "manual_fiducials": "fiducials/Rhone_ManualFiducials_200909.csv",
     "marked_fiducials": "../manual_input/marked_fiducials.csv",
     "sgi_1973": "shapefiles/SGI_1973.shp",
+    "sgi_2016": "shapefiles/inventory_sgi2016_r2020/SGI_2016_glaciers.shp",
     "outlines_1935": "shapefiles/Glacierarea_1935_fixed.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
     "viewsheds": "shapefiles/V_TERRA_BGDI.shp",
     "base_DEM": "basedata/swissALTI3D_pr2019_LV95.tif",
-    "lake_outlines": "shapefiles/swissTLM3D_lakes.shp"
+    "lake_outlines": "shapefiles/swissTLM3D_lakes.shp",
+    "massbalance_index": "massbalance_index.dat",
 }
 # Prepend the directory and file paths with the input root directory path.
 INPUT_DIRECTORIES = {key: os.path.join(INPUT_ROOT_DIRECTORY, value) for key, value in INPUT_DIRECTORIES.items()}

@@ -22,7 +22,9 @@ TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "base_dem")
 CACHE_FILES = {
     "base_dem": os.path.join(TEMP_DIRECTORY, "base_dem.tif"),
     "base_dem_years": os.path.join(TEMP_DIRECTORY, "base_dem_years.tif"),
-    "hillshade": os.path.join(TEMP_DIRECTORY, "base_dem_hillshade.tif")
+    "hillshade": os.path.join(TEMP_DIRECTORY, "base_dem_hillshade.tif"),
+    "slope": os.path.join(TEMP_DIRECTORY, "base_dem_slope.tif"),
+    "aspect": os.path.join(TEMP_DIRECTORY, "base_dem_aspect.tif")
 }
 
 
@@ -109,6 +111,24 @@ def make_hillshade(overwrite: bool = False):
     ]
 
     subprocess.run(list(map(str, gdal_commands)), check=True)
+
+
+def make_slope_and_aspect(overwrite: bool = False):
+
+    for product in ["slope", "aspect"]:
+        if not overwrite and os.path.isfile(CACHE_FILES[product]):
+            return
+
+        gdal_commands = [
+            "gdaldem", product,
+            "-co", "COMPRESS=DEFLATE",
+            "-co", "BIGTIFF=YES",
+            CACHE_FILES["base_dem"],
+            CACHE_FILES[product]
+        ]
+
+        print(f"Generating {product}...")
+        subprocess.run(list(map(str, gdal_commands)), check=True)
 
 
 if __name__ == "__main__":

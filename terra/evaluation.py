@@ -21,6 +21,7 @@ import pytransform3d.transformations
 import rasterio as rio
 import rasterio.warp  # pylint: disable=unused-import
 import sklearn.linear_model
+import sklearn.pipeline
 import sklearn.utils
 from tqdm import tqdm
 
@@ -94,7 +95,7 @@ def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float], resolution: 
     return destination
 
 
-def load_reference_elevation(bounds: dict[str, float], resolution: float = CONSTANTS.dem_resolution) -> np.ndarray:
+def load_reference_elevation(bounds: dict[str, float], resolution: float = CONSTANTS.dem_resolution, base_dem_prefix="base_dem") -> np.ndarray:
     """
     Load the reference DEM and reproject it to the given bounds.
 
@@ -123,7 +124,7 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
         larger_bounds["north"],
         larger_bounds["east"],
         larger_bounds["south"],
-        base_dem.CACHE_FILES["base_dem"],
+        base_dem.CACHE_FILES[base_dem_prefix],
         temp_dem_path
     ]
     subprocess.run(list(map(str, gdal_commands)), check=True, stdout=subprocess.PIPE)
@@ -1045,6 +1046,75 @@ def plot_normalized_mb_gradient():
     plt.show()
 
 
+def try_local_hypsometric(id=10527, min_elevation=0):
+    glacier_outlines = gpd.read_file(files.INPUT_FILES["outlines_1935"])
+    years = 2018 - 1935
+    outline = glacier_outlines.loc[glacier_outlines["EZGNR"] == id].iloc[0]
+
+    dem = rio.open(base_dem.CACHE_FILES["base_dem"])
+    ddem = rio.open(CACHE_FILES["merged_yearly_ddem"])
+
+    dem_cropped, _ = rio.mask.mask(dem, outline.geometry, crop=True, nodata=np.nan)
+    ddem_cropped, _ = rio.mask.mask(ddem, outline.geometry, crop=True, nodata=np.nan)
+
+    mask = ~np.isnan(ddem_cropped)
+    old_heights = (dem_cropped - (ddem_cropped * years))[mask]
+    ddem_vals = ddem_cropped[mask]
+
+    # Generate height bins for every 50 m if the glacier has a range of more than 500 m, else 10% bins.
+    height_bins = np.arange(old_heights.min(), old_heights.max(), step=50) \
+        if (old_heights.max() - old_heights.min()) > 500\
+        else np.linspace(old_heights.min(), old_heights.max(), num=10)
+
+    height_middles = (height_bins - 50 / 2)[1:]
+
+    # Bin index 0 means below height_bins.min(), bin index len(height_bins) is above height_bins.max()
+    # These should not be kept
+    bin_indices = np.digitize(old_heights, height_bins)
+    ddem_binned, ddem_counts, ddem_errors = np.array([
+        [
+            np.mean(ddem_vals[bin_indices == i]) if i in bin_indices else np.nan,
+            len(ddem_vals[bin_indices == i]),
+            np.std(ddem_vals[bin_indices == i]) if i in bin_indices else np.nan
+        ] for i in np.arange(1, bin_indices.max())
+    ], dtype=float).T
+
+    model = sklearn.pipeline.make_pipeline(
+        sklearn.preprocessing.PolynomialFeatures(3), sklearn.linear_model.LinearRegression())
+    model.fit(
+        X=height_middles[~np.isnan(ddem_binned) & (height_middles > min_elevation)].reshape(-1, 1),
+        y=ddem_binned[~np.isnan(ddem_binned) & (height_middles > min_elevation)]
+    )
+    predicted_ddem = model.predict(height_middles.reshape(-1, 1))
+
+    predicted_heights = dem_cropped.copy()
+    predicted_heights[~np.isnan(predicted_heights)
+                      ] -= model.predict(predicted_heights[~np.isnan(predicted_heights)].reshape(-1, 1)) * years
+    new_bin_indices = np.digitize(predicted_heights.flatten(), height_bins)
+    hist = np.array([len(predicted_heights.flatten()[new_bin_indices == i])
+                     for i in np.arange(1, new_bin_indices.max())])
+
+    ddem_count_percentages = np.clip((ddem_counts / hist) * 100, 0, 100)
+
+    plt.errorbar(ddem_binned, height_middles, xerr=ddem_errors)
+    for i, count in enumerate(ddem_count_percentages):
+        plt.annotate(f"{count:.0f}%", (ddem_binned[i] + ddem_errors[i] + 0.01, height_middles[i]), va="center")
+
+    plt.plot(predicted_ddem, height_middles)
+
+    plt.xlabel("Elevation change (m/a)")
+    plt.ylabel("Elevation (m a.s.l.)")
+
+
+def temp_hypso():
+    plt.figure(figsize=(12, 10))
+    plt.subplot(121)
+    try_local_hypsometric(10017, min_elevation=2100)
+    plt.subplot(122)
+    try_local_hypsometric(min_elevation=2300)
+    plt.show()
+
+
 def main(redo: bool = False):
     """Run each step from start to finish."""
     # Generate both the glacier mask and stable ground mask
@@ -1071,7 +1141,9 @@ def main(redo: bool = False):
 
 
 if __name__ == "__main__":
-    plot_regional_mb_gradient()
+    # try_local_hypsometric()
+    temp_hypso()
+    # plot_regional_mb_gradient()
     # plot_normalized_mb_gradient()
 
     # plot_periglacial_error(show=True)

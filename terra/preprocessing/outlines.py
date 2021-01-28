@@ -9,6 +9,8 @@ import tempfile
 import geopandas as gpd
 import numpy as np
 import rasterio as rio
+import shapely.ops
+from tqdm import tqdm
 
 from terra import base_dem, files
 from terra.constants import CONSTANTS
@@ -166,6 +168,37 @@ def read_stable_ground_mask(bounds: dict[str, float], resolution: float = CONSTA
     :returns: A boolean numpy array with a shape corresponding to the given bounds and resolution.
     """
     return read_mask(CACHE_FILES["stable_ground_mask"], bounds=bounds, resolution=resolution)
+
+
+def fix_freudinger_outlines():
+    min_overlap_threshold = 0.05
+    temp_dir = os.path.join(files.TEMP_DIRECTORY, "outlines")
+    freudinger = gpd.read_file(files.INPUT_FILES["outlines_1935"])
+    sgi_2016 = gpd.read_file(files.INPUT_FILES["sgi_2016"]).to_crs(CONSTANTS.crs_epsg.replace("::", ":"))
+
+    new_outlines = gpd.GeoDataFrame(columns=["EZGNR", "sgi-ids", "geometry"], crs=sgi_2016.crs)
+    for i, row in tqdm(freudinger.iterrows(), total=freudinger.shape[0]):
+        overlapping = sgi_2016.geometry.overlaps(row.geometry)
+        if np.count_nonzero(overlapping.values) == 0:
+            continue
+        diff = sgi_2016[overlapping].geometry.intersection(row.geometry)
+
+        fraction = diff.area / row.geometry.area
+
+        mask = overlapping.copy()
+        mask[mask] = fraction > min_overlap_threshold
+
+        sorting = np.argsort(fraction[fraction > min_overlap_threshold])[::-1]
+
+        sgi_ids = sgi_2016[mask].iloc[sorting]["sgi-id"].values
+        sgi_col = ",".join(sgi_ids)
+
+        merged_geom = shapely.ops.unary_union(np.r_[sgi_2016[mask].geometry.values, row.geometry])
+
+        new_outlines.loc[i] = row["EZGNR"], sgi_col, merged_geom
+
+    new_outlines.to_file(os.path.join(temp_dir, "new_outlines.shp"))
+    print(new_outlines)
 
 
 if __name__ == "__main__":
