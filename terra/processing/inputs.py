@@ -14,16 +14,24 @@ CACHE_FILES = {
 
 
 def get_dataset_names() -> list[str]:
+    """Return a list of dataset names, sorted by median easting coordinate (left to right)."""
     image_metadata = image_meta.read_metadata()
     image_metadata["year"] = image_metadata["date"].apply(lambda date: date.year)
     unique_instruments = np.unique(image_metadata["Instrument"])
 
-    datasets: list[str] = []
-    for instrument in unique_instruments:
-        unique_years = np.unique(image_metadata.loc[image_metadata["Instrument"] == instrument, "year"])
-        datasets += [f"{instrument}_{year}" for year in unique_years]
-
-    return datasets
+    datasets: list[str] = []                                                                                            
+    dataset_sorting: list[float] = []                                                                                   
+    for instrument in unique_instruments:                                                                               
+        unique_years = np.unique(image_metadata.loc[image_metadata["Instrument"] == instrument, "year"])                
+        for year in unique_years:                                                                                       
+            dataset_images = image_metadata.loc[                                                                                                                       
+                (image_metadata["Instrument"] == instrument) & (image_metadata["year"] == year)]                                               
+            dataset_sorting.append(dataset_images["easting"].median())                                                                         
+            datasets.append(f"{instrument}_{year}")                                                                                            
+                                                                                                                                               
+    sorted_datasets = [dataset for _, dataset in sorted(zip(dataset_sorting, datasets))]                                                          
+                                                                                                                                                  
+    return sorted_datasets
 
 
 DATASETS = get_dataset_names() + ["full"]
