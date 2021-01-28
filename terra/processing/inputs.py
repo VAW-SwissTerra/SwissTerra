@@ -96,7 +96,7 @@ def export_camera_orientation_csv(dataset: str):
     #image_metadata = get_dataset_metadata(dataset)
     filenames = get_dataset_filenames(dataset)
     all_image_meta = georeferencing.generate_corrected_metadata()
-    image_metadata = all_image_meta[all_image_meta["Image file"].isin(filenames)]
+    image_metadata = all_image_meta[all_image_meta["Image file"].isin(filenames)].copy()
 
     # image_metadata["label"] = image_metadata["Image file"].str.replace(".tif", "")
     image_metadata.rename(columns={"Image file": "label"}, inplace=True)
