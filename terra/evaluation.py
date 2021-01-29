@@ -59,7 +59,7 @@ def extract_station_name(filepath: str) -> str:
     return filepath[filepath.index("station_"):filepath.index("station_") + 12]
 
 
-def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float], resolution: float,
+def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float], resolution: float, band: int = 1,
                   crs: Optional[rio.crs.CRS] = None, resampling=rio.warp.Resampling.cubic_spline) -> np.ndarray:
     """
     Reproject a DEM to the given bounds.
@@ -67,6 +67,7 @@ def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float], resolution: 
     :param dem: A DEM read through rasterio.
     :param bounds: The target west, east, north, and south bounding coordinates.
     :param resolution: The target resolution in metres.
+    :param band: The band number. Default=1.
     :param crs: Optional. The target CRS (defaults to the input DEM crs)
     :returns: The elevation array in the destination bounds, resolution and CRS.
     """
@@ -83,7 +84,7 @@ def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float], resolution: 
 
     # Reproject the DEM and put the output in the destination array
     rio.warp.reproject(
-        source=dem.read(1),
+        source=dem.read(band),
         destination=destination,
         src_transform=dem.transform,
         dst_transform=dst_transform,
@@ -439,6 +440,7 @@ def merge_rasters(raster_filepaths: list[str], output_filepath: str = CACHE_FILE
         bounds["south"] = min(bounds.get("south") or 1e22, raster.bounds.bottom)
         bounds["north"] = max(bounds.get("north") or -1e22, raster.bounds.top)
 
+        dtype = raster.dtypes[0]
         raster.close()
 
     # Find the corresponding output shape of the merged raster
@@ -460,7 +462,9 @@ def merge_rasters(raster_filepaths: list[str], output_filepath: str = CACHE_FILE
         top_index = int((bounds["north"] - raster.bounds.top) / CONSTANTS.dem_resolution)
         left_index = int((raster.bounds.left - bounds["west"]) / CONSTANTS.dem_resolution)
 
-        raster_values = raster.read(1)
+        raster_values = raster.read(1).astype(np.float32)
+        if raster.dtypes[0] == "uint8":
+            raster_values[raster_values == 255] = np.nan
         # Add the raster value to the merged raster
         merged_raster[top_index:top_index + raster.height,
                       left_index:left_index + raster.width] += np.nan_to_num(raster_values, nan=0.0)
@@ -476,6 +480,9 @@ def merge_rasters(raster_filepaths: list[str], output_filepath: str = CACHE_FILE
     # Divide by the value count to get the mean (instead of the sum)
     merged_raster /= value_count
 
+    nodata_value = -9999 if not dtype == "uint8" else 255
+    merged_raster[value_count == 0] = nodata_value
+
     # Save the merged raster
     transform = rio.transform.from_bounds(**bounds, width=merged_raster.shape[1], height=merged_raster.shape[0])
     with rio.open(
@@ -487,10 +494,10 @@ def merge_rasters(raster_filepaths: list[str], output_filepath: str = CACHE_FILE
             count=1,
             crs=rio.open(raster_filepaths[0]).crs,
             transform=transform,
-            dtype=merged_raster.dtype,
-            nodata=-9999
+            dtype=dtype,
+            nodata=nodata_value
     ) as raster:
-        raster.write(merged_raster, 1)
+        raster.write(merged_raster.astype(dtype), 1)
 
 
 def examine_ddem(filepath: str) -> bool:
@@ -1052,13 +1059,13 @@ def try_local_hypsometric(id=10527, min_elevation=0):
     outline = glacier_outlines.loc[glacier_outlines["EZGNR"] == id].iloc[0]
 
     dem = rio.open(base_dem.CACHE_FILES["base_dem"])
-    ddem = rio.open(CACHE_FILES["merged_yearly_ddem"])
+    ddem = rio.open(CACHE_FILES["merged_ddem"])
 
     dem_cropped, _ = rio.mask.mask(dem, outline.geometry, crop=True, nodata=np.nan)
     ddem_cropped, _ = rio.mask.mask(ddem, outline.geometry, crop=True, nodata=np.nan)
 
     mask = ~np.isnan(ddem_cropped)
-    old_heights = (dem_cropped - (ddem_cropped * years))[mask]
+    old_heights = (dem_cropped - (ddem_cropped))[mask]
     ddem_vals = ddem_cropped[mask]
 
     # Generate height bins for every 50 m if the glacier has a range of more than 500 m, else 10% bins.
@@ -1079,20 +1086,57 @@ def try_local_hypsometric(id=10527, min_elevation=0):
         ] for i in np.arange(1, bin_indices.max())
     ], dtype=float).T
 
+    class dh_model:
+
+        def __init__(self, min_elevation: float):
+            self.min_elevation = min_elevation
+            self.lower_model = sklearn.linear_model.LinearRegression()
+            self.upper_model = sklearn.pipeline.make_pipeline(
+                sklearn.preprocessing.PolynomialFeatures(3),
+                sklearn.linear_model.LinearRegression()
+            )
+
+        def fit(self, x_train, y_train):
+            assert x_train.shape[0] == y_train.shape[0]
+            lower_mask = ~np.isnan(y_train) & (x_train.flatten() < self.min_elevation)
+            upper_mask = ~np.isnan(y_train) & (x_train.flatten() > self.min_elevation)
+
+            self.lower_model.fit(x_train[lower_mask], y_train[lower_mask])
+            self.upper_model.fit(x_train[upper_mask], y_train[upper_mask])
+
+        def predict(self, x_test):
+            lower_mask = (x_test.flatten() < self.min_elevation)
+            upper_mask = (x_test.flatten() > self.min_elevation)
+            lower_predictions = self.lower_model.predict(x_test[lower_mask])
+            upper_predictions = self.upper_model.predict(x_test[upper_mask])
+            all_predictions = np.append(lower_predictions, upper_predictions)
+
+            return all_predictions
+
     model = sklearn.pipeline.make_pipeline(
         sklearn.preprocessing.PolynomialFeatures(3), sklearn.linear_model.LinearRegression())
     model.fit(
         X=height_middles[~np.isnan(ddem_binned) & (height_middles > min_elevation)].reshape(-1, 1),
         y=ddem_binned[~np.isnan(ddem_binned) & (height_middles > min_elevation)]
     )
+
     predicted_ddem = model.predict(height_middles.reshape(-1, 1))
+
+    merged_model = dh_model(min_elevation=min_elevation)
+    merged_model.fit(height_middles.reshape(-1, 1), ddem_binned)
+    predicted_ddem = merged_model.predict(height_middles.reshape(-1, 1))
 
     predicted_heights = dem_cropped.copy()
     predicted_heights[~np.isnan(predicted_heights)
-                      ] -= model.predict(predicted_heights[~np.isnan(predicted_heights)].reshape(-1, 1)) * years
+                      ] -= merged_model.predict(predicted_heights[~np.isnan(predicted_heights)].reshape(-1, 1))
     new_bin_indices = np.digitize(predicted_heights.flatten(), height_bins)
     hist = np.array([len(predicted_heights.flatten()[new_bin_indices == i])
                      for i in np.arange(1, new_bin_indices.max())])
+    modern_bin_indices = np.digitize(dem_cropped.flatten(), height_bins)
+    modern_hist = np.array([len(dem_cropped.flatten()[modern_bin_indices == i])
+                            for i in np.arange(1, modern_bin_indices.max())])
+
+    elevation_change = np.sum(hist * 25 * predicted_ddem) / (np.sum(np.mean([hist, modern_hist], axis=0) * 25)) * 0.85
 
     ddem_count_percentages = np.clip((ddem_counts / hist) * 100, 0, 100)
 
@@ -1102,7 +1146,8 @@ def try_local_hypsometric(id=10527, min_elevation=0):
 
     plt.plot(predicted_ddem, height_middles)
 
-    plt.xlabel("Elevation change (m/a)")
+    plt.title(f"Mean elevation change: {elevation_change:.2f} m w.e.")
+    plt.xlabel("Elevation change (m)")
     plt.ylabel("Elevation (m a.s.l.)")
 
 
@@ -1130,14 +1175,12 @@ def main(redo: bool = False):
     ]
     good_ddem_fraction = len(good_ddem_filepaths) / len(find_dems(CACHE_FILES["ddems_coreg_dir"]))
     print(f"{len(good_ddem_filepaths)} classified as good ({good_ddem_fraction * 100:.2f}%)")
-    if redo or not os.path.isfile(CACHE_FILES["merged_ddem"]):
-        merge_rasters(good_ddem_filepaths)
-
-    if redo or not os.path.isfile(CACHE_FILES["merged_yearly_ddem"]):
-        merge_rasters(
-            good_yearly_ddems,
-            output_filepath=CACHE_FILES["merged_yearly_ddem"]
-        )
+    print("Merging dDEMs")
+    merge_rasters(good_ddem_filepaths)
+    merge_rasters(
+        good_yearly_ddems,
+        output_filepath=CACHE_FILES["merged_yearly_ddem"]
+    )
 
 
 if __name__ == "__main__":
