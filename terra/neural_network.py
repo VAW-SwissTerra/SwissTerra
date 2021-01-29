@@ -11,6 +11,9 @@ import sklearn.model_selection
 import sklearn.neural_network
 import sklearn.pipeline
 
+#from terra import synthesis
+from terra import utilities
+
 
 def read_data():
     temp_file = "temp/values.pkl"
@@ -80,34 +83,45 @@ def plot_loss(history):
 
 def neural():
     import tensorflow as tf
+    tf.get_logger().setLevel('INFO')
     from tqdm.keras import TqdmCallback
-    data = read_data()[0, :, :]
+    if False:
+        data = read_data()[0, :, :]
 
-    data = data[~np.isnan(data).any(axis=1)]
-    #data = data[:50000, :]
-    data -= np.min(data, axis=0)
-    data /= np.max(data, axis=0)
+        data = data[~np.isnan(data).any(axis=1)]
+        #data = data[:50000, :]
+        data -= np.min(data, axis=0)
+        data /= np.max(data, axis=0)
 
-    data = data.astype("float32")
+        data = data.astype("float32")
 
-    all_xvals = data[:, :-1]
-    all_yvals = data[:, -1]
+        all_xvals = data[:, :-1]
+        all_yvals = data[:, -1]
 
-    x_train, x_test, y_train, y_test = sklearn.model_selection.train_test_split(all_xvals, all_yvals)
+    x_all, y_all = pickle.load(open("temp/values2.pkl", "rb"))
+
+    x_train, x_test, y_train, y_test = sklearn.model_selection.train_test_split(x_all, y_all)
 
     model = tf.keras.Sequential([
-        tf.keras.layers.Dense(64, activation="relu", input_shape=(x_train.shape[1],)),
-        tf.keras.layers.Dense(64, activation="relu"),
-        tf.keras.layers.Dense(64, activation="relu"),
+        tf.keras.layers.Dense(512, activation="relu", input_shape=(x_train.shape[1],)),
+        tf.keras.layers.Dense(512, activation="relu"),
         tf.keras.layers.Dense(1)])
 
     model.compile(
         loss="mean_absolute_error",
         optimizer=tf.keras.optimizers.Adadelta())
 
-    history = model.fit(x_train, y_train, epochs=1000, batch_size=64, verbose=0, callbacks=[TqdmCallback(verbose=0)])
+    history = model.fit(x_train, y_train, epochs=700, batch_size=32, verbose=0, callbacks=[TqdmCallback(verbose=0)])
 
-    predictions = model.predict(x_test)
+    predictions = model.predict(x_test)[:, 0]
+
+    correlation_matrix = np.corrcoef(y_test, predictions)
+
+    correlation_xy = correlation_matrix[0, 1]
+
+    r_squared = correlation_xy ** 2
+
+    print(r_squared)
 
     plt.scatter(y_test, predictions)
     plt.plot([0, 1], [0, 1])
