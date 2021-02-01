@@ -36,6 +36,7 @@ class Constants(ConstantType):  # pylint: disable=R0903
     rotation_accuracy: float = 1.0  # The assumed rotational accuracy in degrees.
     max_height: float = 5000.0  # The highest mountain in the Alps is just less than 5000 m.
     base_dem_date: datetime = datetime(year=2018, month=8, day=1)  # The date of the base DEM
+    ice_density: float = 0.85  # The m to m w.e. conversion factor for geodetic elevation change.
 
 
 CONSTANTS = Constants()
