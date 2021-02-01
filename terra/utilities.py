@@ -13,6 +13,7 @@ from typing import Any, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio as rio
 import sklearn.linear_model
 
 libc = ctypes.CDLL(None)
@@ -154,3 +155,41 @@ def plot_progress():
     plt.tight_layout()
 
     plt.savefig("temp/figures/dem_generation_progress.jpg", dpi=300)
+
+
+def plot_progress_map():
+    """
+    Show the west-to-east progress of the processing.
+
+    The datasets are processed in an easterly direction (since late Jan 2021), so this function finds the latest
+    finished dataset and fills all until its median (representative) easting coordinate.
+    """
+    ssh_commands = ["ssh", "vierzack07", "cat",
+                    "Projects/ETH/SwissTerra/temp/processing/progress.log", "|", "grep", "finished"]
+    text = subprocess.run(ssh_commands, check=True, stdout=subprocess.PIPE, encoding="utf-8").stdout.splitlines()[-1]
+
+    dataset = text.split(",")[1]
+    instrument, year_str = dataset.split("_")
+
+    # Import dependencies here to avoid circular imports
+    from terra.preprocessing import image_meta  # pylint: disable=import-outside-toplevel
+    from terra import base_dem  # pylint: disable=import-outside-toplevel
+
+    metadata = image_meta.read_metadata()
+    metadata["year"] = metadata["date"].apply(lambda date: date.year)
+
+    dataset_meta = metadata.loc[(metadata["Instrument"] == instrument) & (metadata["year"] == int(year_str))]
+
+    min_easting = dataset_meta["easting"].median()
+
+    hillshade = rio.open(base_dem.CACHE_FILES["hillshade"])
+    extent = (hillshade.bounds.left, hillshade.bounds.right, hillshade.bounds.bottom, hillshade.bounds.top)
+    plt.imshow(hillshade.read(1), extent=extent, cmap="Greys_r")
+
+    plt.fill_between([hillshade.bounds.left, min_easting], hillshade.bounds.top,
+                     hillshade.bounds.bottom, color="red", alpha=0.4)
+
+    plt.ylim(hillshade.bounds.bottom, hillshade.bounds.top)
+    plt.xlim(hillshade.bounds.left, hillshade.bounds.right)
+    plt.title(f"Last dataset: {dataset}. Easting: {min_easting:.0f} m.")
+    plt.show()

@@ -7,8 +7,7 @@ import subprocess
 import time
 from typing import List
 
-from terra import files  # TODO: Change to import submodules instead
-from terra import preprocessing, processing
+from terra import dem_tools, files, orthomosaics, preprocessing, processing
 
 
 def main():
@@ -87,6 +86,16 @@ def parse_args():
     }
     processing_parser.add_argument("action", help=generate_help_text(choices), metavar="action", choices=choices.keys())
     processing_parser.set_defaults(func=processing_commands)
+
+    # Evaluation
+    choices = {
+        "coregister": "Coregister the generated DEMs",
+        "transform-ortho": "Transform orthomosaics with the estimated DEM transforms.",
+    }
+    evaluation_parser = commands.add_parser("evaluation", formatter_class=argparse.RawTextHelpFormatter,
+                                            help="Data evaluation.", description="Processed data evaluation.")
+    evaluation_parser.add_argument("action", help=generate_help_text(choices), metavar="action", choices=choices.keys())
+    evaluation_parser.set_defaults(func=evaluation_commands)
 
     return parser.parse_args()
 
@@ -198,3 +207,11 @@ def processing_commands(args):
         processing.inputs.check_inputs(args.dataset)
     elif args.action == "generate-inputs":
         processing.inputs.generate_inputs(args.dataset)
+
+
+def evaluation_commands(args):
+    """Run the evaluation subcommands."""
+    if args.action == "coregister":
+        dem_tools.coregister_and_merge_ddems()
+    elif args.action == "transform-ortho":
+        orthomosaics.apply_coregistrations()

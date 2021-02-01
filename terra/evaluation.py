@@ -58,7 +58,7 @@ def read_icp_stats(station_name: str) -> dict[str, float]:
     # Calculate the transformation angle from the transformation matrix
     matrix = np.array(coreg_stats["transform"].replace("\n", " ").split(" ")).astype(float).reshape((4, 4))
     quaternion = pytransform3d.transformations.pq_from_transform(matrix)[3:]
-    angle = np.rad2eg(pytransform3d.rotations.axis_angle_from_quaternion(quaternion)[3])
+    angle = np.rad2deg(pytransform3d.rotations.axis_angle_from_quaternion(quaternion)[3])
 
     stats = {"fitness": coreg_stats["fitness"], "overlap": coreg_stats["overlap"], "angle": angle}
 
