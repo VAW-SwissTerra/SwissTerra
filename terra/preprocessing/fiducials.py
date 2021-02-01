@@ -41,12 +41,12 @@ class ImageTransforms:
         :param: transforms: Optional: Transforms to map to the above filenames (shapes have to be the same).
         """
         # Check that the given filenames and transforms (if any) have the same length
-        if not None in [filenames, transforms] and len(filenames) != len(transforms):  # type: ignore
+        if None not in [filenames, transforms] and len(filenames) != len(transforms):  # type: ignore
             raise ValueError("The given filenames and transforms are not equally long.")
 
         # Map the given filenames and transforms (if any) to each other, or create an empty collection
-        self._inner_dict: dict[str, skimage.transform.EuclideanTransform] = dict(
-            zip(filenames, transforms)) if not None in [filenames, transforms] else {}  # type: ignore
+        self._inner_dict: dict[str, skimage.transform.EuclideanTransform] =\
+            dict(zip(filenames, transforms)) if None not in [filenames, transforms] else {}  # type: ignore
 
         self.frame_type = frame_type
 
@@ -416,7 +416,6 @@ def generate_reference_frame(image_transforms: ImageTransforms) -> np.ndarray:
     # Set the shape of all the images to match the first one. TODO: Make this an argument?
     first_image = load_image(image_transforms.keys()[0])
     output_shape = first_image.shape
-    output_dtype = first_image.dtype
 
     # Instantiate a progress bar.
     progress_bar = tqdm(total=len(image_transforms.keys()), desc="Transforming images")
@@ -570,9 +569,6 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
         # Optionally stretch the lighness to between the 1st and 99th percentile of the lightness
         if equalize:
             min_value = np.percentile(fiducial.flatten(), 10)
-            #max_value = np.percentile(fiducial.flatten(), 90)
-            # fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
-            #                   a_min=0, a_max=255).astype(fiducial.dtype)
             fiducial = cv2.threshold(
                 src=np.clip(fiducial - min_value, a_min=0, a_max=255),
                 thresh=40,

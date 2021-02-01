@@ -1,3 +1,4 @@
+"""Helper functions for base DEM (swissALTI3D) operations."""
 from __future__ import annotations
 
 import os
@@ -5,12 +6,8 @@ import subprocess
 import tempfile
 
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import rasterio as rio
-import rasterio.features
-import rasterio.fill
-import scipy.interpolate
 import shapely
 
 from terra import files

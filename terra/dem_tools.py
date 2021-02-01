@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 from typing import Any, Optional
 
-import cv2
 import numpy as np
 import rasterio as rio
 from tqdm import tqdm
@@ -16,7 +15,7 @@ from terra import base_dem, evaluation, files
 from terra.constants import CONSTANTS
 from terra.evaluation import CACHE_FILES
 from terra.preprocessing import image_meta, outlines
-from terra.processing import inputs, processing_tools
+from terra.processing import processing_tools
 
 
 def find_dems(folder: str) -> list[str]:
@@ -68,7 +67,8 @@ def reproject_dem(dem: rio.DatasetReader, bounds: dict[str, float], resolution: 
     return destination
 
 
-def load_reference_elevation(bounds: dict[str, float], resolution: float = CONSTANTS.dem_resolution, base_dem_prefix="base_dem") -> np.ndarray:
+def load_reference_elevation(bounds: dict[str, float], resolution: float = CONSTANTS.dem_resolution,
+                             base_dem_prefix="base_dem") -> np.ndarray:
     """
     Load the reference DEM and reproject it to the given bounds.
 
@@ -115,7 +115,7 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
     return reference_elevation
 
 
-def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILES["ddems_dir"]) -> np.ndarray:
+def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILES["ddems_dir"]) -> Optional[np.ndarray]:
     """Compare the DEM difference between the reference DEM and the given filepath."""
     dem = rio.open(filepath)
     dem_elevation = dem.read(1)
@@ -124,7 +124,7 @@ def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILE
 
     # Check if it's only NaNs
     if np.all(~np.isfinite(dem_elevation)):
-        return
+        return None
 
     bounds = dict(zip(["west", "south", "east", "north"], list(dem.bounds)))
     reference_elevation = load_reference_elevation(bounds)
@@ -148,39 +148,6 @@ def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILE
             raster.write(ddem, 1)
 
     return ddem
-
-
-def generate_glacier_mask(overwrite: bool = False, resolution: float = CONSTANTS.dem_resolution) -> None:
-    """Generate a boolean glacier mask from the 1935 map."""
-    raise DeprecationWarning
-    # Skip if it already exists
-    if not overwrite and os.path.isfile(outlines.CACHE_FILES["glacier_mask"]):
-        return
-    # Get the bounds from the reference DEM
-    reference_bounds = json.loads(
-        subprocess.run(
-            ["gdalinfo", "-json", base_dem.CACHE_FILES["base_dem"]],
-            check=True,
-            stdout=subprocess.PIPE
-        ).stdout
-    )["cornerCoordinates"]
-
-    # Generate the mask
-    gdal_commands = [
-        "gdal_rasterize",
-        "-burn", 1,  # Glaciers get a value of 1
-        "-a_nodata", 0,  # Non-glaciers get a value of 0
-        "-ot", "Byte",
-        "-tr", resolution, resolution,
-        "-te", *reference_bounds["lowerLeft"], *reference_bounds["upperRight"],
-        files.INPUT_FILES["outlines_1935"],
-        outlines.CACHE_FILES["glacier_mask"]
-    ]
-    subprocess.run(list(map(str, gdal_commands)), check=True, stdout=subprocess.PIPE)
-
-    # Unset the nodata value to correctly display in e.g. QGIS
-    subprocess.run(["gdal_edit.py", "-unsetnodata", outlines.CACHE_FILES["glacier_mask"]],
-                   check=True, stdout=subprocess.PIPE)
 
 
 def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
@@ -253,7 +220,6 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
         with open(result_path) as infile:
             stats = json.load(infile)["stages"]["filters.icp"]
     except FileNotFoundError:
-        print(f"Filepath {filepath} stats not found. Failed alignment?")
         return None
 
     # Use the resultant transformation to transform the original DEM

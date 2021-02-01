@@ -20,28 +20,28 @@ CACHE_FILES = {
 
 def get_instrument_names() -> np.ndarray:
     """Return the names of each instrument in the metadata cache."""
-    image_meta = preprocessing.image_meta.read_metadata()
+    image_metadata = preprocessing.image_meta.read_metadata()
 
-    return np.unique(image_meta["Instrument"])
+    return np.unique(image_metadata["Instrument"])
 
 
 def plot_instrument_years() -> None:
     """Plot the temporal distribution of used instruments."""
-    image_meta = preprocessing.image_meta.read_metadata()
+    image_metadata = preprocessing.image_meta.read_metadata()
 
     fig = plt.figure(figsize=(9, 5), dpi=80)
     fig.canvas.set_window_title('Instrument distribution')
     axis = plt.gca()
 
-    instrument_labels = list(np.unique(image_meta["Instrument"]))
+    instrument_labels = list(np.unique(image_metadata["Instrument"]))
     instrument_labels.sort()
     indices = {instrument: index for index, instrument in enumerate(instrument_labels)}
-    image_meta["instrument_index"] = image_meta["Instrument"].apply(lambda x: indices[x])
-    image_meta["date_s"] = image_meta["date"].astype(int)
-    camera_order = image_meta.groupby("instrument_index").median()["date_s"].sort_values()
+    image_metadata["instrument_index"] = image_metadata["Instrument"].apply(lambda x: indices[x])
+    image_metadata["date_s"] = image_metadata["date"].astype(int)
+    camera_order = image_metadata.groupby("instrument_index").median()["date_s"].sort_values()
 
     for i, instrument in enumerate(instrument_labels[index] for index in camera_order.index):
-        cameras = image_meta.loc[image_meta["Instrument"] == instrument]
+        cameras = image_metadata.loc[image_metadata["Instrument"] == instrument]
 
         axis.text(x=i, y=cameras["date"].max().year, s=cameras.shape[0], ha="center", va="bottom")
         axis.violinplot(dataset=cameras["date"].apply(
@@ -83,7 +83,7 @@ def plot_frame_type_distribution():
             count = df['Instrument'].count()
             print(f"\t{i}: {count}")
             if count < 10:
-                for j, row in df.iterrows():
+                for _, row in df.iterrows():
                     print("\t\t" + row["Image file"])
 
     return
@@ -171,8 +171,4 @@ def plot_year_distribution():
 
 
 if __name__ == "__main__":
-    # plot_instrument_years()
     plot_frame_type_distribution()
-    #image_metadata = image_meta.read_metadata()
-    # for filename in image_metadata[image_metadata["Instrument"].isin(["Wild4"])]["Image file"]:
-    #    print(filename)

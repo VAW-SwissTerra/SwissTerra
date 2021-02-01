@@ -23,6 +23,15 @@ CACHE_FILES = {
 
 
 def crop_geotiff(filepath: str, output_filepath: str, bounds: dict[str, int], resolution: float) -> np.ndarray:
+    """
+    Crop a geotiff to the given bounds.
+
+    :param filepath: The input GeoTiff filepath.
+    :param output_filepath: THe output GeoTiff filepath.
+    :param bounds: west, north, east, and south bounding coordinates.
+    :param resolution: The output resolution of the GeoTiff.
+    :returns: An array corresponding to the cropped raster.
+    """
     gdal_commands = [
         "gdal_translate",
         "-q",
@@ -46,6 +55,7 @@ def crop_geotiff(filepath: str, output_filepath: str, bounds: dict[str, int], re
 
 
 def get_aletsch_bounds() -> dict[str, int]:
+    """Get the bounds for the terminus of Grosser Aletschgletscher."""
     bounds = {"west": 643000, "north": 141000}
     bounds["east"] = bounds["west"] + 5000
     bounds["south"] = bounds["north"] - 5000
@@ -54,6 +64,7 @@ def get_aletsch_bounds() -> dict[str, int]:
 
 
 def plot_aletsch():
+    """Plot the Grosser Aletschgletscher example figure."""
     bounds = get_aletsch_bounds()
 
     temp_dir = tempfile.TemporaryDirectory()
@@ -155,6 +166,7 @@ def plot_aletsch():
 
 
 def aletsch_ortho():
+    """Plot the Grosser Aletschgletscher example orthomosaic figure."""
     bounds = get_aletsch_bounds()
     bounds["south"] += int((bounds["north"] - bounds["south"]) / 2)
 

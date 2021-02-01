@@ -146,7 +146,7 @@ def model_df(data: pd.DataFrame, sample_cols: list[str],
         shuffled_data = shuffled_data.iloc[:exclusion_border]
 
         # Warnings may arise here which should just be repressed.
-        with warnings.catch_warnings(record=True) as warning_filter:
+        with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             model = sklearn.linear_model.LogisticRegression(
                 random_state=0, solver='lbfgs', multi_class='ovr', max_iter=300)
@@ -617,18 +617,18 @@ class DHModel:
         return all_predictions
 
 
-def plot_local_hypsometric(id=10527, min_elevation=0):
+def plot_local_hypsometric(glacier_id=10527, min_elevation=0):
     """
     Run the local hypsometric approach on a glacier (Freudinger id.) and plot it.
 
     plt.show() is not run and has to be done separately.
 
-    :param id: The "EZGNR" id in the Freudinger collection.
+    :param glacier_id: The "EZGNR" id in the Freudinger collection.
     :param min_elevation: The minimum modern day glacier elevation.
     """
     glacier_outlines = gpd.read_file(files.INPUT_FILES["outlines_1935"])
     # Find the outline of the chosen glacier.
-    outline = glacier_outlines.loc[glacier_outlines["EZGNR"] == id].iloc[0]
+    outline = glacier_outlines.loc[glacier_outlines["EZGNR"] == glacier_id].iloc[0]
 
     dem = rio.open(base_dem.CACHE_FILES["base_dem"])
     ddem = rio.open(CACHE_FILES["merged_ddem"])

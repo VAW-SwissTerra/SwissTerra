@@ -19,7 +19,7 @@ ZEISS_FIDUCIAL_LOCATIONS: dict[str, tuple[int, int]] = {
 }
 
 
-class Constants(ConstantType):  # pylint: disable=R0903
+class Constants(ConstantType):  # pylint: disable=too-few-public-methods
     """Readonly constants."""
 
     scanning_resolution: float = 21e-6  # The scanning resolution of the images in meters (21 micrometers)
