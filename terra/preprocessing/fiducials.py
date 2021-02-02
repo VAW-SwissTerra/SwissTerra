@@ -868,6 +868,7 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
             frame_type=instruments[instrument]
         ) for instrument in instruments
     }
+
     # Extract fiducial templates from each instrument to use with the feature matching.
     fiducial_templates = {
         instrument: get_fiducial_templates(
@@ -888,6 +889,13 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
             cache=True
         ) for instrument in instruments
     }
+    count_with_four = 0
+    count_with_three = 0
+    for key in estimated_transforms:
+        res = estimated_transforms[key].estimated_residuals
+        nan_count = np.count_nonzero(np.isnan(res), axis=1)
+        count_with_four += nan_count[nan_count == 0].shape[0]
+        count_with_three += nan_count[nan_count == 1].shape[0]
 
     # Replace the poorly estimated transforms with manual transforms
     merged_transforms = {
@@ -897,13 +905,23 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
         ) for instrument in instruments
     }
 
+    count_with_two_manual = 0
+    for key in merged_transforms:
+        res = merged_transforms[key].manual_residuals
+        if res is None:
+            continue
+        nan_count = np.count_nonzero(np.isnan(res), axis=1)
+        count_with_two_manual += nan_count[nan_count == 2].shape[0]
+
+    print(f"{count_with_four=}, {count_with_three=}, {count_with_two_manual=}")
+
     if verbose:
         rmses: list[float] = []
         for instrument in instruments:
             rms = compare_transforms(manual_transforms[instrument], estimated_transforms[instrument])
             rmses.append(rms)
             print(f"{instrument} manual-to-estimated error: {rms:.2f} px")
-        print(f"\nMean manual-to-estimated error: {np.mean(rmses):.2f} px\n")
+        print(f"\nMedian manual-to-estimated error: {np.median(rmses):.2f} px\n")
 
         for key in merged_transforms:
             print(key, "\t\t", merged_transforms[key])
@@ -1016,6 +1034,7 @@ def save_all_fiducial_locations(image_transforms: ImageTransforms) -> dict[str, 
 
 
 if __name__ == "__main__":
-    transforms = get_all_instrument_transforms(complement=False, verbose=False)
+    transforms = get_all_instrument_transforms(complement=False, verbose=True, cache=False)
 
-    save_all_fiducial_locations(transforms)
+    print(transforms)
+    # save_all_fiducial_locations(transforms)
