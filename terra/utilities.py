@@ -130,7 +130,7 @@ def plot_progress():
 
     christmas = datetime.datetime(year=2020, month=12, day=25, tzinfo=datetime.timezone.utc)
 
-    after_christmas = data.loc["2020-12-25":]  # type: ignore
+    after_christmas = data.loc[data["date"] > christmas]  # type: ignore
 
     model = sklearn.linear_model.LinearRegression()
     model.fit(after_christmas["seconds"].values.reshape(-1, 1), after_christmas["dems_tot"])

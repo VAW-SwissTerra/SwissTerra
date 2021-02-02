@@ -31,16 +31,8 @@ from terra.processing import inputs
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "evaluation")
 
 CACHE_FILES = {
-    "metashape_dems_dir": os.path.join(inputs.TEMP_DIRECTORY, "output/dems"),
-    "ddems_dir": os.path.join(TEMP_DIRECTORY, "ddems/"),
-    "ddems_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg_ddems/"),
-    "ddems_yearly_coreg_dir": os.path.join(TEMP_DIRECTORY, "yearly_coreg_ddems/"),
-    "dem_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg/"),
-    "dem_coreg_meta_dir": os.path.join(TEMP_DIRECTORY, "coreg_meta/"),
     "ddem_quality": os.path.join(files.MANUAL_INPUT_DIR, "ddem_quality.csv"),
     "ddem_stats": os.path.join(TEMP_DIRECTORY, "ddem_stats.pkl"),
-    "merged_ddem": os.path.join(TEMP_DIRECTORY, "merged_ddem.tif"),
-    "merged_yearly_ddem": os.path.join(TEMP_DIRECTORY, "merged_yearly_ddem.tif"),
     "elevation_vs_change_data": os.path.join(TEMP_DIRECTORY, "elevation_vs_change_data.csv"),
 }
 
@@ -52,7 +44,7 @@ def read_icp_stats(station_name: str) -> dict[str, float]:
     :param station_name: The name of the station, e.g. station_3500.
     :returns: A dictionary of coregistration statistics.
     """
-    with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")) as infile:
+    with open(os.path.join(dem_tools.CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")) as infile:
         coreg_stats = json.load(infile)
 
     # Calculate the transformation angle from the transformation matrix
@@ -213,7 +205,7 @@ def evaluate_ddems(improve: bool = False) -> list[str]:
     :returns: A list of filepaths to the dDEMs that are deemed good.
     """
     if improve:
-        coreg_ddems = np.array(dem_tools.find_dems(CACHE_FILES["ddems_coreg_dir"]))
+        coreg_ddems = np.array(dem_tools.find_dems(dem_tools.CACHE_FILES["ddems_coreg_dir"]))
 
         # Shuffle the data so that dDEMs from different areas come up in succession.
         np.random.shuffle(coreg_ddems)
@@ -261,7 +253,7 @@ def evaluate_ddems(improve: bool = False) -> list[str]:
     print(f"Modelled coregistered dDEM usability with an accuracy of: {score:.2f}")
 
     # Load all of the dDEMs (not just the ones with manuall quality flags)
-    all_files = pd.DataFrame(data=dem_tools.find_dems(CACHE_FILES["ddems_coreg_dir"]), columns=["filepath"])
+    all_files = pd.DataFrame(data=dem_tools.find_dems(dem_tools.CACHE_FILES["ddems_coreg_dir"]), columns=["filepath"])
     all_files["station_name"] = all_files["filepath"].apply(dem_tools.extract_station_name)
 
     # Read the ICP coregistration statistics from each respective coregistered DEM
@@ -300,7 +292,7 @@ def evaluate_ddems(improve: bool = False) -> list[str]:
     non_coreg_log["good"] = non_coreg_log["quality"] == "good"
     non_coreg_log["station_name"] = non_coreg_log["filepath"].apply(dem_tools.extract_station_name)
 
-    ddem_stats = get_ddem_stats(CACHE_FILES["ddems_dir"])
+    ddem_stats = get_ddem_stats(dem_tools.CACHE_FILES["ddems_dir"])
     training_cols = ddem_stats.columns[2:]
     for i, row in non_coreg_log.iterrows():
         stat_row = ddem_stats.loc[ddem_stats["filepath"] == row["filepath"]].iloc[0]
@@ -333,7 +325,7 @@ def plot_periglacial_error(show: bool = False):
 
     :param show: Open the result using xdg-open.
     """
-    ddem_dataset = rio.open(CACHE_FILES["merged_ddem"])
+    ddem_dataset = rio.open(dem_tools.CACHE_FILES["merged_ddem"])
     glacier_mask = dem_tools.read_and_crop_glacier_mask(ddem_dataset, resampling=rio.warp.Resampling.nearest)
 
     ddem_values = ddem_dataset.read(1)
@@ -369,7 +361,7 @@ def get_normalized_elevation_vs_change(redo: bool = False) -> pd.Series:
         return pd.read_csv(CACHE_FILES["elevation_vs_change_data"], header=None,
                            index_col=0, squeeze=True, dtype=np.float64)
     glaciers = gpd.read_file(files.INPUT_FILES["outlines_1935"])
-    yearly_ddem = rio.open(CACHE_FILES["merged_yearly_ddem"])
+    yearly_ddem = rio.open(dem_tools.CACHE_FILES["merged_yearly_ddem"])
     full_glacier_mask = rio.open(outlines.CACHE_FILES["glacier_mask"])
 
     # These arrays will iteratively be filled.
@@ -431,7 +423,7 @@ def plot_regional_mb_gradient():
         with open(cache_filepath, "rb") as infile:
             heights, glacier_vals = pickle.load(infile)
     else:
-        ddem_dataset = rio.open(CACHE_FILES["merged_yearly_ddem"])
+        ddem_dataset = rio.open(dem_tools.CACHE_FILES["merged_yearly_ddem"])
         glacier_mask = dem_tools.read_and_crop_glacier_mask(ddem_dataset, resampling=rio.warp.Resampling.nearest)
         print("Read glacier mask")
 
@@ -631,7 +623,7 @@ def plot_local_hypsometric(glacier_id=10527, min_elevation=0):
     outline = glacier_outlines.loc[glacier_outlines["EZGNR"] == glacier_id].iloc[0]
 
     dem = rio.open(base_dem.CACHE_FILES["base_dem"])
-    ddem = rio.open(CACHE_FILES["merged_ddem"])
+    ddem = rio.open(dem_tools.CACHE_FILES["merged_ddem"])
 
     # Crop the DEM and dDEM to the glacier outline.
     dem_cropped, _ = rio.mask.mask(dem, outline.geometry, crop=True, nodata=np.nan)
@@ -704,11 +696,31 @@ def plot_local_hypsometric(glacier_id=10527, min_elevation=0):
 
 def temp_hypso():
     """Plot a quick figure showing Unteraarsgletscher and Paradisgletscher."""
+    data = pd.read_csv(files.INPUT_FILES["massbalance_index"], skiprows=2,
+                       delimiter=" * ", engine="python", index_col=0).loc[1920:].cumsum()
+    data /= data.min(axis=0) * -1
     plt.figure(figsize=(12, 10))
-    plt.subplot(121)
+    gridshape = (2, 3)
+    plt.subplot2grid(gridshape, (0, 0), rowspan=2)
     plot_local_hypsometric(10017, min_elevation=2100)
-    plt.subplot(122)
+    plt.title("Unteraarsgletscher")
+    plt.subplot2grid(gridshape, (0, 1), rowspan=2)
     plot_local_hypsometric(min_elevation=2300)
+    plt.title("Paradisgletscher")
+    plt.subplot2grid(gridshape, (0, 2), rowspan=1)
+    plt.plot(data["A56"], zorder=0)
+    start_year = 1927
+    end_year = 2016
+    plt.scatter([start_year, end_year], data.loc[[start_year, end_year], "A56"], color="black", zorder=2)
+    plt.ylabel("Cumulative MB (norm.)")
+    plt.subplot2grid(gridshape, (1, 2), rowspan=1)
+    plt.plot(data["A1"], zorder=0)
+    start_year = 1924
+    end_year = 2015
+    plt.scatter([start_year, end_year], data.loc[[start_year, end_year], "A56"], color="black", zorder=2)
+    plt.ylabel("Cumulative MB (norm.)")
+
+    plt.tight_layout()
     plt.show()
 
 

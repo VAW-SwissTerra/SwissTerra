@@ -13,9 +13,20 @@ from tqdm import tqdm
 
 from terra import base_dem, evaluation, files
 from terra.constants import CONSTANTS
-from terra.evaluation import CACHE_FILES
 from terra.preprocessing import image_meta, outlines
-from terra.processing import processing_tools
+from terra.processing import inputs, processing_tools
+
+TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "evaluation")
+CACHE_FILES = {
+    "metashape_dems_dir": os.path.join(inputs.TEMP_DIRECTORY, "output/dems"),
+    "ddems_dir": os.path.join(TEMP_DIRECTORY, "ddems/"),
+    "ddems_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg_ddems/"),
+    "ddems_yearly_coreg_dir": os.path.join(TEMP_DIRECTORY, "yearly_coreg_ddems/"),
+    "dem_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg/"),
+    "dem_coreg_meta_dir": os.path.join(TEMP_DIRECTORY, "coreg_meta/"),
+    "merged_ddem": os.path.join(TEMP_DIRECTORY, "merged_ddem.tif"),
+    "merged_yearly_ddem": os.path.join(TEMP_DIRECTORY, "merged_yearly_ddem.tif"),
+}
 
 
 def find_dems(folder: str) -> list[str]:

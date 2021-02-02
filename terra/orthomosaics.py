@@ -40,7 +40,7 @@ def apply_coreg_to_ortho(station_name: str, overwrite: bool = False):
     # Find the needed filepaths using the station name.
     ortho_path = os.path.join(CACHE_FILES["metashape_ortho_dir"], f"{station_name}_orthomosaic.tif")
     dem_path = os.path.join(CACHE_FILES["metashape_dem_dir"], f"{station_name}_dense_DEM.tif")
-    coreg_meta_path = os.path.join(evaluation.CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")
+    coreg_meta_path = os.path.join(dem_tools.CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json")
     out_filepath = os.path.join(CACHE_FILES["ortho_coreg_dir"], f"{station_name}_ortho_coreg.tif")
 
     # Check if the file already exists and shouldn't be redone.
