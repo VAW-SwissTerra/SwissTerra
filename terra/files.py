@@ -31,6 +31,8 @@ INPUT_FILES = {
     "manual_fiducials": "fiducials/Rhone_ManualFiducials_200909.csv",
     "marked_fiducials": "../manual_input/marked_fiducials.csv",
     "sgi_1973": "shapefiles/SGI_1973.shp",
+    "sgi_1850": "shapefiles/SGI_1850.shp",
+    "lk50_modified_sgi_1973": "../manual_input/shapes/sgi_1973_modified_lk50.shp",
     "sgi_2016": "shapefiles/inventory_sgi2016_r2020/SGI_2016_glaciers.shp",
     "outlines_1935": "shapefiles/Glacierarea_1935_fixed.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",

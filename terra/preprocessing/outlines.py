@@ -1,24 +1,31 @@
 """Stable-ground / glacier outlines and mask functions."""
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import tempfile
+import warnings
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import rasterio as rio
+import shapely
 import shapely.ops
 from tqdm import tqdm
 
-from terra import base_dem, files
+from terra import base_dem, files, utilities
 from terra.constants import CONSTANTS
+from terra.preprocessing import image_meta
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "preprocessing/")
 CACHE_FILES = {
     "glacier_mask": os.path.join(TEMP_DIRECTORY, "glacier_mask.tif"),
-    "stable_ground_mask": os.path.join(TEMP_DIRECTORY, "stable_ground_mask.tif")
+    "stable_ground_mask": os.path.join(TEMP_DIRECTORY, "stable_ground_mask.tif"),
+    "lk50_outlines": os.path.join(TEMP_DIRECTORY, "lk50_outlines.shp"),
 }
 
 
@@ -201,5 +208,131 @@ def fix_freudinger_outlines():
     print(new_outlines)
 
 
+def fix_lk50_outlines():
+    pd.set_option('mode.chained_assignment', "raise")
+
+    lk50_sgi1973 = gpd.read_file(files.INPUT_FILES["lk50_modified_sgi_1973"])
+    merged_sgi_lk50 = gpd.GeoDataFrame(columns=lk50_sgi1973.columns, crs=lk50_sgi1973.crs)
+
+    # Merge all shapes that have the same SGI id.
+    for sgi, glaciers in tqdm(lk50_sgi1973.groupby("SGI"), total=np.unique(lk50_sgi1973["SGI"]).shape[0],
+                              desc="Merging SGI labels"):
+        glacier = glaciers.iloc[0].copy()
+        glacier["SGI"] = sgi
+        if glaciers.shape[0] > 1:
+            for _, glacier2 in glaciers.iterrows():
+                # Skip if self-comparison
+                if glacier["OBJECTID"] == glacier2["OBJECTID"]:
+                    continue
+                glacier.geometry = glacier.geometry.union(glacier2.geometry)
+
+        merged_sgi_lk50.loc[merged_sgi_lk50.shape[0]] = glacier
+
+    assert np.unique(merged_sgi_lk50["SGI"]).shape[0] == merged_sgi_lk50.shape[0]
+    merged_parent_lk50 = gpd.GeoDataFrame(columns=lk50_sgi1973.columns, crs=lk50_sgi1973.crs)
+
+    # Merge all shapes that have the same parent and that touch.
+    for parent, glaciers in tqdm(merged_sgi_lk50.groupby("Parent1850"),
+                                 desc="Merging touching polygons with same parent"):
+        glaciers_copy = glaciers.copy()
+        glaciers_copy["Parent1850"] = parent
+        if parent is None:
+            merged_parent_lk50 = merged_parent_lk50.append(glaciers, ignore_index=True)
+            continue
+
+        glaciers_copy["area"] = glaciers.geometry.apply(lambda x: x.area)
+        glaciers_copy.sort_values("area", ascending=False, inplace=True)
+        glacier = glaciers_copy.iloc[0].copy()
+
+        if glaciers.shape[0] > 1:
+            for _, glacier2 in glaciers.iterrows():
+                # Skip if self-comparison
+                if glacier["SGI"] == glacier2["SGI"]:
+                    continue
+                # Merge geometries if they touch
+                if glacier.geometry.touches(glacier2.geometry):
+                    glacier.geometry = glacier.geometry.union(glacier2.geometry)
+                # Otherwise, add glacier2 to the output dataframe
+                else:
+                    merged_parent_lk50.loc[merged_parent_lk50.shape[0]] = glacier2[glaciers.columns]
+
+        # Add the biggest glacier to the dataframe
+        merged_parent_lk50.loc[merged_parent_lk50.shape[0]] = glacier[glaciers.columns]
+
+    sgi_1973 = gpd.read_file(files.INPUT_FILES["sgi_1973"]).to_crs(lk50_sgi1973.crs)
+    sgi_1850 = gpd.read_file(files.INPUT_FILES["sgi_1850"]).to_crs(lk50_sgi1973.crs)
+
+    image_metadata = image_meta.read_metadata()
+
+    lk50 = gpd.GeoDataFrame(columns=list(lk50_sgi1973.columns) + ["changed_from_1973", "date"], crs=lk50_sgi1973.crs)
+    for i, glacier in tqdm(merged_parent_lk50.iterrows(), total=merged_parent_lk50.shape[0],
+                           desc="Validating geometries and finding proper date"):
+        glacier_1973 = sgi_1973.loc[sgi_1973["OBJECTID"] == glacier["OBJECTID"]].iloc[0]
+
+        # Check if the difference is larger than 10 m2. If so, it is assumed to have been changed from the 1973 outline.
+        changed_from_1973 = abs(glacier.geometry.area - glacier_1973.geometry.area) > 10
+        glacier["changed_from_1973"] = changed_from_1973
+
+        centroid = glacier.geometry.centroid
+        # Calculate the distance to all cameras
+        image_metadata["dist"] = np.linalg.norm([image_metadata["easting"] - centroid.x,
+                                                 image_metadata["northing"] - centroid.y
+                                                 ], axis=0)
+        # Sort the values by the distance
+        image_metadata.sort_values("dist", inplace=True)
+        # Take the date of the closest camera.
+        glacier["date"] = str(image_metadata.iloc[0]["date"])
+
+        # If it has been changed since 1973, check that it is indeed larger, and that it is smaller than in 1850.
+        if changed_from_1973:
+            fixed_geom = glacier.geometry.union(glacier_1973.geometry)
+
+            # First try to find the 1850 parent
+            potential_glacier_1850 = sgi_1850.loc[sgi_1850["SGI"] == glacier["Parent1850"]]
+            # If that doesn't work, try to find the 1850 glacier by its SGI id
+            # if potential_glacier_1850.shape[0] == 0:
+            #    potential_glacier_1850 = sgi_1850.loc[sgi_1850["SGI"] == glacier["SGI"]]
+            # If that succeeded, fix so the glacier's extent does not extend farther than in 1850.
+            if potential_glacier_1850.shape[0] != 0:
+                try:
+                    # Shapely sends a comparison exception as a warning, so it should be treated appropriately.
+                    with warnings.catch_warnings():
+                        glacier_1850 = potential_glacier_1850.iloc[0].copy()
+                        # Merge geometries if there are more than one SGI entries of the same name
+                        if potential_glacier_1850.shape[0] > 1:
+                            for j in range(1, potential_glacier_1850.shape[0]):
+                                glacier_1850.geometry = glacier_1850.geometry.buffer(0).union(
+                                    potential_glacier_1850.iloc[j].geometry.buffer(0))
+                        warnings.simplefilter("always")
+                        outside_1850 = fixed_geom.buffer(0).difference(glacier_1850.geometry.buffer(0))
+                        # Try to loop over the presumed multi-polygon
+                        try:
+                            for polygon in outside_1850:
+                                fixed_geom = fixed_geom.difference(polygon)
+                        except TypeError:  # TypeError comes up if it's a single polygon
+                            fixed_geom = fixed_geom.difference(outside_1850)
+                except shapely.errors.TopologicalError:
+                    pass
+
+            # Measure the old (1973) and new (LK50) areas to make sure that the geometry did not turn invalid somehow.
+            if fixed_geom.geom_type not in ["MultiPolygon", "Polygon"]:
+                continue
+
+            new_area = sum([geom.area for geom in fixed_geom]) \
+                if fixed_geom.geom_type == "MultiPolygon" else fixed_geom.area
+            old_area = sum([geom.area for geom in glacier_1973.geometry]) \
+                if glacier_1973.geometry.geom_type == "MultiPolygon" else glacier_1973.geometry.area
+            if new_area > old_area and fixed_geom.is_valid:
+                glacier.geometry = fixed_geom
+
+        lk50.loc[i] = glacier
+
+    # There is a new modified column. The length and area columns are now old!
+    lk50.drop(columns=["Shape_Leng", "Shape_Area", "modified"], inplace=True)
+
+    lk50.to_file(CACHE_FILES["lk50_outlines"])
+    print(lk50)
+
+
 if __name__ == "__main__":
-    generate_stable_ground_mask()
+    fix_lk50_outlines()
