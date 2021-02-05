@@ -461,10 +461,12 @@ def is_dataset_finished(dataset: str) -> bool:
             continue
         if "Made 0 dense clouds" in line:
             has_zero_dense_clouds = True
+        elif "dense clouds" in line:
+            has_zero_dense_clouds = False
 
         if "finished" in line:
             if has_zero_dense_clouds:
-                return False
+                continue
             return True
 
     return False
