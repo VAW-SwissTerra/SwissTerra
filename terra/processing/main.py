@@ -46,11 +46,14 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         chunk = metashape_tools.load_or_remake_chunk(doc, dataset)
     except Exception as exception:
         # This error comes up if no chunks were successfully aligned.
-        if "Empty chunk list" in str(exception):
+        if "Empty chunk list" in str(exception) or "No aligned cameras" in str(exception):
             log(dataset, "Alignment not possible")
             return
         raise exception
     log(dataset, "Dataset is aligned")
+
+    # Make sure that the region is representative of the dataset.
+    chunk.resetRegion()
 
     # Get the names of the stereo-pairs
     pairs = metashape_tools.get_chunk_stereo_pairs(chunk)

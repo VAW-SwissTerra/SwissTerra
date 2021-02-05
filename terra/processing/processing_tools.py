@@ -453,10 +453,18 @@ def is_dataset_finished(dataset: str) -> bool:
     with open(log_path) as infile:
         log = infile.read().splitlines()
 
+    # A bug (05/02/2021) led to some chunks not generating dense clouds but registering as finished
+    # This checks for "finished" and "Made 0 dense clouds"
+    has_zero_dense_clouds = False
     for line in log:
         if dataset not in line:
             continue
+        if "Made 0 dense clouds" in line:
+            has_zero_dense_clouds = True
+
         if "finished" in line:
+            if has_zero_dense_clouds:
+                return False
             return True
 
     return False
