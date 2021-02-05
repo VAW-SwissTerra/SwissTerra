@@ -208,29 +208,21 @@ def fix_freudinger_outlines():
     print(new_outlines)
 
 
+def is_polygon(geometry) -> bool:
+    return geometry.geom_type in ["MultiPolygon", "Polygon"]
+
+
 def fix_lk50_outlines():
     pd.set_option('mode.chained_assignment', "raise")
 
     lk50_sgi1973 = gpd.read_file(files.INPUT_FILES["lk50_modified_sgi_1973"])
-    merged_sgi_lk50 = gpd.GeoDataFrame(columns=lk50_sgi1973.columns, crs=lk50_sgi1973.crs)
+    merged_sgi_lk50 = lk50_sgi1973.dissolve(by="SGI", as_index=False)
 
-    # Merge all shapes that have the same SGI id.
-    for sgi, glaciers in tqdm(lk50_sgi1973.groupby("SGI"), total=np.unique(lk50_sgi1973["SGI"]).shape[0],
-                              desc="Merging SGI labels"):
-        glacier = glaciers.iloc[0].copy()
-        glacier["SGI"] = sgi
-        if glaciers.shape[0] > 1:
-            for _, glacier2 in glaciers.iterrows():
-                # Skip if self-comparison
-                if glacier["OBJECTID"] == glacier2["OBJECTID"]:
-                    continue
-                glacier.geometry = glacier.geometry.union(glacier2.geometry)
-
-        merged_sgi_lk50.loc[merged_sgi_lk50.shape[0]] = glacier
+    # At this point, the SGI ids are the same as SGI1973, but in the parent-merging, these may change.
+    merged_sgi_lk50["SGI1973"] = merged_sgi_lk50["SGI"]
 
     assert np.unique(merged_sgi_lk50["SGI"]).shape[0] == merged_sgi_lk50.shape[0]
-    merged_parent_lk50 = gpd.GeoDataFrame(columns=lk50_sgi1973.columns, crs=lk50_sgi1973.crs)
-
+    merged_parent_lk50 = gpd.GeoDataFrame(columns=merged_sgi_lk50.columns, crs=lk50_sgi1973.crs)
     # Merge all shapes that have the same parent and that touch.
     for parent, glaciers in tqdm(merged_sgi_lk50.groupby("Parent1850"),
                                  desc="Merging touching polygons with same parent"):
@@ -251,27 +243,34 @@ def fix_lk50_outlines():
                     continue
                 # Merge geometries if they touch
                 if glacier.geometry.touches(glacier2.geometry):
+                    # Merge the geometry
                     glacier.geometry = glacier.geometry.union(glacier2.geometry)
+                    # Append the SGI id of the smaller glacier to the larger's SGI1973 column.
+                    glacier["SGI1973"] += "," + glacier2["SGI"]
                 # Otherwise, add glacier2 to the output dataframe
                 else:
-                    merged_parent_lk50.loc[merged_parent_lk50.shape[0]] = glacier2[glaciers.columns]
+                    merged_parent_lk50.loc[merged_parent_lk50.shape[0]] = glacier2
 
         # Add the biggest glacier to the dataframe
-        merged_parent_lk50.loc[merged_parent_lk50.shape[0]] = glacier[glaciers.columns]
+        merged_parent_lk50.loc[merged_parent_lk50.shape[0]] = glacier[merged_parent_lk50.columns]
 
+    merged_parent_lk50.to_file(os.path.join(os.path.dirname(CACHE_FILES["lk50_outlines"]), "lk50_merged_parents.shp"))
+
+    # Read the 1973 outlines to make sure the new geometry is consistently larger or the same as in 1973
     sgi_1973 = gpd.read_file(files.INPUT_FILES["sgi_1973"]).to_crs(lk50_sgi1973.crs)
+    # Read the 1850 ouitlines to make sure the new geometry is consistently smaller or the same as in 1850
     sgi_1850 = gpd.read_file(files.INPUT_FILES["sgi_1850"]).to_crs(lk50_sgi1973.crs)
-
     image_metadata = image_meta.read_metadata()
 
-    lk50 = gpd.GeoDataFrame(columns=list(lk50_sgi1973.columns) + ["changed_from_1973", "date"], crs=lk50_sgi1973.crs)
+    lk50 = gpd.GeoDataFrame(columns=list(merged_parent_lk50.columns) +
+                            ["mod_1973", "date"], crs=lk50_sgi1973.crs)
     for i, glacier in tqdm(merged_parent_lk50.iterrows(), total=merged_parent_lk50.shape[0],
                            desc="Validating geometries and finding proper date"):
         glacier_1973 = sgi_1973.loc[sgi_1973["OBJECTID"] == glacier["OBJECTID"]].iloc[0]
 
         # Check if the difference is larger than 10 m2. If so, it is assumed to have been changed from the 1973 outline.
         changed_from_1973 = abs(glacier.geometry.area - glacier_1973.geometry.area) > 10
-        glacier["changed_from_1973"] = changed_from_1973
+        glacier["mod_1973"] = changed_from_1973
 
         centroid = glacier.geometry.centroid
         # Calculate the distance to all cameras
@@ -281,7 +280,7 @@ def fix_lk50_outlines():
         # Sort the values by the distance
         image_metadata.sort_values("dist", inplace=True)
         # Take the date of the closest camera.
-        glacier["date"] = str(image_metadata.iloc[0]["date"])
+        glacier["date"] = str(image_metadata.iloc[0]["date"].date())
 
         # If it has been changed since 1973, check that it is indeed larger, and that it is smaller than in 1850.
         if changed_from_1973:
@@ -294,30 +293,45 @@ def fix_lk50_outlines():
             #    potential_glacier_1850 = sgi_1850.loc[sgi_1850["SGI"] == glacier["SGI"]]
             # If that succeeded, fix so the glacier's extent does not extend farther than in 1850.
             if potential_glacier_1850.shape[0] != 0:
-                try:
-                    # Shapely sends a comparison exception as a warning, so it should be treated appropriately.
-                    with warnings.catch_warnings():
-                        glacier_1850 = potential_glacier_1850.iloc[0].copy()
-                        # Merge geometries if there are more than one SGI entries of the same name
-                        if potential_glacier_1850.shape[0] > 1:
-                            for j in range(1, potential_glacier_1850.shape[0]):
-                                glacier_1850.geometry = glacier_1850.geometry.buffer(0).union(
-                                    potential_glacier_1850.iloc[j].geometry.buffer(0))
-                        warnings.simplefilter("always")
-                        outside_1850 = fixed_geom.buffer(0).difference(glacier_1850.geometry.buffer(0))
-                        # Try to loop over the presumed multi-polygon
-                        try:
-                            for polygon in outside_1850:
-                                fixed_geom = fixed_geom.difference(polygon)
-                        except TypeError:  # TypeError comes up if it's a single polygon
-                            fixed_geom = fixed_geom.difference(outside_1850)
-                except shapely.errors.TopologicalError:
-                    pass
+                glacier_1850 = potential_glacier_1850.iloc[0].copy()
+                # Merge geometries if there are more than one SGI entries of the same name
+                if potential_glacier_1850.shape[0] > 1:
+                    for j in range(1, potential_glacier_1850.shape[0]):
+                        geom = potential_glacier_1850.iloc[j].geometry.buffer(0)
+                        if geom not in ["MultiPolygon", "Polygon"]:
+                            continue
+                        glacier_1850.geometry = glacier_1850.geometry.union(geom)
+                geoms1850 = [glacier_1850.geometry] if glacier_1850.geometry.geom_type == "Polygon"\
+                    else glacier_1850.geometry
 
-            # Measure the old (1973) and new (LK50) areas to make sure that the geometry did not turn invalid somehow.
+                new_geom = shapely.geometry.Polygon()
+                new_geom_modified = False
+                old_geom = fixed_geom if fixed_geom.geom_type == "MultiPolygon" else [fixed_geom]
+                for old_g in old_geom:
+                    if old_g.geom_type not in ["MultiPolygon", "Polygon"]:
+                        continue
+                    for geom in geoms1850:
+                        if geom.geom_type not in ["MultiPolygon", "Polygon"]:
+                            continue
+                        diff = geom.buffer(0).difference(old_g.buffer(0)).buffer(0)
+                        if geom.geom_type not in ["MultiPolygon", "Polygon"]:
+                            continue
+                        try:
+                            intersection = old_g.buffer(0).difference(diff)
+                        except shapely.errors.TopologicalError:
+                            continue
+                        if intersection.geom_type not in ["MultiPolygon", "Polygon"]:
+                            continue
+
+                        new_geom_modified = True
+                        new_geom = new_geom.union(intersection)
+                if new_geom_modified:
+                    fixed_geom = new_geom
+
             if fixed_geom.geom_type not in ["MultiPolygon", "Polygon"]:
                 continue
 
+            # Measure the old (1973) and new (LK50) areas to make sure that the geometry did not turn invalid somehow.
             new_area = sum([geom.area for geom in fixed_geom]) \
                 if fixed_geom.geom_type == "MultiPolygon" else fixed_geom.area
             old_area = sum([geom.area for geom in glacier_1973.geometry]) \
@@ -328,7 +342,7 @@ def fix_lk50_outlines():
         lk50.loc[i] = glacier
 
     # There is a new modified column. The length and area columns are now old!
-    lk50.drop(columns=["Shape_Leng", "Shape_Area", "modified"], inplace=True)
+    lk50.drop(columns=["Shape_Leng", "Shape_Area", "modified", "OBJECTID"], inplace=True)
 
     lk50.to_file(CACHE_FILES["lk50_outlines"])
     print(lk50)
