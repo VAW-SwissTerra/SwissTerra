@@ -26,3 +26,7 @@ dependencies:
                 - https://s3-eu-west-1.amazonaws.com/download.agisoft.com/Metashape-1.7.1-cp35.cp36.cp37.cp38-abi3-linux_x86_64.whl 
                 - toml
                 - graphviz
+                - sklearn
+                - pytransform3d
+                - earthpy
+                - jinja2
