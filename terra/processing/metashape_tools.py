@@ -21,6 +21,11 @@ from terra.utilities import is_gpu_available, no_stdout
 
 CACHE_FILES = {}
 
+
+# To fix a bug in Metashape 1.7.0
+if ms.version == "1.7.0":
+    ms.app.settings.setValue("main/depth_pm_enable", "False")
+
 # Add dataset metashape project paths
 for _dataset in inputs.DATASETS:
     CACHE_FILES[f"{_dataset}_metashape_project"] = os.path.join(
@@ -652,8 +657,8 @@ def build_dense_clouds(doc: ms.Document, chunk: ms.Chunk, pairs: list[str], qual
             with no_stdout():
                 chunk.buildDenseCloud(point_confidence=True)
         except MemoryError:
-                warnings.warn(f"Memory error on dense cloud for {label} in {chunk.meta['dataset']}")
-                return False
+            warnings.warn(f"Memory error on dense cloud for {label} in {chunk.meta['dataset']}")
+            return False
         except Exception as exception:
             if "Zero resolution" in str(exception):
                 return False

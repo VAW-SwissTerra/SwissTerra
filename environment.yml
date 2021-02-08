@@ -23,6 +23,6 @@ dependencies:
                 - PySimpleGUI
                 - cartopy
                 - tqdm==4.51.*
-                - http://download.agisoft.com/Metashape-1.6.5-cp35.cp36.cp37-abi3-linux_x86_64.whl
+                - https://s3-eu-west-1.amazonaws.com/download.agisoft.com/Metashape-1.7.1-cp35.cp36.cp37.cp38-abi3-linux_x86_64.whl 
                 - toml
-                  # python-pdal might not be needed
+                - graphviz

@@ -1,5 +1,7 @@
 """Constant parameters that are used throughout the module."""
 
+from datetime import datetime
+
 from terra.utilities import ConstantType
 
 WILD_FIDUCIAL_LOCATIONS: dict[str, tuple[int, int]] = {
@@ -17,7 +19,7 @@ ZEISS_FIDUCIAL_LOCATIONS: dict[str, tuple[int, int]] = {
 }
 
 
-class Constants(ConstantType):  # pylint: disable=R0903
+class Constants(ConstantType):  # pylint: disable=too-few-public-methods
     """Readonly constants."""
 
     scanning_resolution: float = 21e-6  # The scanning resolution of the images in meters (21 micrometers)
@@ -32,6 +34,9 @@ class Constants(ConstantType):  # pylint: disable=R0903
     tripod_height: float = 1.2  # The approximate height of the tripods that were used (according to SwissTopo)
     position_accuracy: float = 2.0  # The assumed position accuracy in m after accounting for spatial systematic shifts
     rotation_accuracy: float = 1.0  # The assumed rotational accuracy in degrees.
+    max_height: float = 5000.0  # The highest mountain in the Alps is just less than 5000 m.
+    base_dem_date: datetime = datetime(year=2018, month=8, day=1)  # The date of the base DEM
+    ice_density: float = 0.85  # The m to m w.e. conversion factor for geodetic elevation change.
 
 
 CONSTANTS = Constants()

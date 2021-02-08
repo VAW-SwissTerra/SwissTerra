@@ -5,15 +5,19 @@ The output is a csv giving the distance of each photograph to each glacier.
 If the photograph's viewshed does not cover a specific glacier, its distance value will be set to NaN.
 
 """
+import datetime
 import os
 
+import earthpy.spatial
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio as rio
 from tqdm import tqdm
 
-from terra import files
+from terra import base_dem, files
+from terra.preprocessing import image_meta
 
 # Temporary files
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "overview")
@@ -128,7 +132,7 @@ def main(cache: bool = True, max_distance: float = 2500.0, area_fraction: float 
     camera_locations = threshold_camera_distance(camera_locations, max_distance=max_distance)
     # Remove all photographs that (after filtering) do not portray a single glacier
     camera_locations = camera_locations[camera_locations.iloc[:, 24:].any(axis=1)]
-    #camera_locations["V_TERRA_13"].to_csv("temp/swissterra_order_20200907.txt", index=False, header=None)
+    # camera_locations["V_TERRA_13"].to_csv("temp/swissterra_order_20200907.txt", index=False, header=None)
     return camera_locations
 
 
@@ -184,8 +188,59 @@ def get_capture_date_distribution():
     # print(camera_locations[year_column])
 
 
+def plot_camera_count_histogram():
+    bins = 75
+
+    camera_locations = image_meta.read_metadata()
+
+    base_dem.make_hillshade(overwrite=False)
+    hillshade = rio.open(base_dem.CACHE_FILES["hillshade"])
+    extent = (hillshade.bounds.left, hillshade.bounds.right, hillshade.bounds.bottom, hillshade.bounds.top)
+
+    hillshade_vals = hillshade.read(1)
+    hillshade_vals = np.ma.MaskedArray(hillshade_vals, mask=hillshade_vals == 0)
+
+    fig = plt.figure(figsize=(8, 6))
+    xbins = np.linspace(camera_locations["easting"].min(), camera_locations["easting"].max(), num=bins)
+    ybins = np.linspace(camera_locations["northing"].min(),
+                        camera_locations["northing"].min() + (xbins.max() - xbins.min()), num=bins)
+    bin_extent = (xbins.min(), xbins.max(), ybins.max(), ybins.min())
+    hist, _, _ = np.histogram2d(camera_locations["easting"], camera_locations["northing"], bins=(xbins, ybins))
+    hist = np.ma.MaskedArray(hist, mask=hist == 0)
+
+    x_indices = np.digitize(camera_locations["easting"], xbins)
+    y_indices = np.digitize(camera_locations["northing"], ybins)
+    camera_locations["indices"] = y_indices + (x_indices * bins)
+
+    ranges = camera_locations.groupby("indices").agg(lambda df: (df.date.max() - df.date.min()).days / 365).iloc[:, 0]\
+        .reindex(np.arange(0, bins ** 2)).fillna(0)\
+        .values.reshape((75, 75))
+    ranges = np.ma.MaskedArray(ranges, mask=ranges == 0)
+
+    plt.subplot(211)
+    plt.imshow(hillshade_vals, cmap="Greys_r", extent=extent)
+    plt.imshow(ranges.T, extent=bin_extent, cmap="coolwarm", alpha=0.7)
+    plt.ylim(camera_locations["northing"].min(), camera_locations["northing"].max())
+
+    plt.xlim(camera_locations["easting"].min(), camera_locations["easting"].max())
+    cbar = plt.colorbar()
+    cbar.set_label("Year range")
+
+    plt.subplot(212)
+    plt.imshow(hillshade_vals, cmap="Greys_r", extent=extent)
+    plt.imshow(hist.T, extent=bin_extent, alpha=0.7)
+    cbar = plt.colorbar()
+    cbar.set_label("Image count")
+
+    plt.ylim(camera_locations["northing"].min(), camera_locations["northing"].max())
+    plt.xlim(camera_locations["easting"].min(), camera_locations["easting"].max())
+    plt.xlabel("Easting (m)")
+    plt.text(0.012, 0.5, "Northing (m)", transform=fig.transFigure, ha="center", va="center", rotation=90)
+
+    plt.subplots_adjust(left=0.05, bottom=0.075, right=1.06, top=0.99, hspace=0.09)
+
+    plt.savefig(os.path.join(files.FIGURE_DIRECTORY, "camera_count_histogram.jpg"), dpi=300)
+
+
 if __name__ == "__main__":
-    # main(cache=True)
-    # get_camera_glacier_viewshed_and_distances_dissolved()
-    get_select_viewsheds()
-    # get_glacier_area_camera_count_relation()
+    plot_camera_count_histogram()

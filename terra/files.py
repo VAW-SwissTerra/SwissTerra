@@ -16,7 +16,9 @@ if "SWISSTERRA_INPUT_DIR" in os.environ:
     INPUT_ROOT_DIRECTORY = os.environ["SWISSTERRA_INPUT_DIR"]
 
 # Set the name of the temporary files directory
-TEMP_DIRECTORY = "temp"
+TEMP_DIRECTORY = "temp/"
+MANUAL_INPUT_DIR = "manual_input/"
+FIGURE_DIRECTORY = os.path.join(TEMP_DIRECTORY, "figures/")
 
 # Set the names of the input directory names (excluding the root)
 # Note that more directories exist. These are the directories where all filetypes are assumed to be the same.
@@ -29,10 +31,15 @@ INPUT_FILES = {
     "manual_fiducials": "fiducials/Rhone_ManualFiducials_200909.csv",
     "marked_fiducials": "../manual_input/marked_fiducials.csv",
     "sgi_1973": "shapefiles/SGI_1973.shp",
+    "sgi_1850": "shapefiles/SGI_1850.shp",
+    "lk50_modified_sgi_1973": "../manual_input/shapes/sgi_1973_modified_lk50.shp",
+    "sgi_2016": "shapefiles/inventory_sgi2016_r2020/SGI_2016_glaciers.shp",
     "outlines_1935": "shapefiles/Glacierarea_1935_fixed.shp",
     "camera_locations": "shapefiles/V_TERRA_VIEWSHED_PARAMS.shp",
     "viewsheds": "shapefiles/V_TERRA_BGDI.shp",
-    "base_DEM": "basedata/swissALTI3D_2018_LV03_LN02.tif",
+    "base_DEM": "basedata/swissALTI3D_pr2019_LV95.tif",
+    "lake_outlines": "shapefiles/swissTLM3D_lakes.shp",
+    "massbalance_index": "massbalance_index.dat",
 }
 # Prepend the directory and file paths with the input root directory path.
 INPUT_DIRECTORIES = {key: os.path.join(INPUT_ROOT_DIRECTORY, value) for key, value in INPUT_DIRECTORIES.items()}
@@ -51,11 +58,11 @@ INPUT_FILE_TYPES = {
 
 
 # Retrieve the dataset tags
-DATASETS: List[str] = []
-for _filename in os.listdir(os.path.join(INPUT_ROOT_DIRECTORY, "datasets")):
-    name, extension = os.path.splitext(_filename)
-    if extension == ".toml":
-        DATASETS.append(name)
+# DATASETS: List[str] = []
+# for _filename in os.listdir(os.path.join(INPUT_ROOT_DIRECTORY, "datasets")):
+#    name, extension = os.path.splitext(_filename)
+#    if extension == ".toml":
+#        DATASETS.append(name)
 
 
 def clear_cache() -> None:

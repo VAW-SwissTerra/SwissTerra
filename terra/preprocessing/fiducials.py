@@ -41,12 +41,12 @@ class ImageTransforms:
         :param: transforms: Optional: Transforms to map to the above filenames (shapes have to be the same).
         """
         # Check that the given filenames and transforms (if any) have the same length
-        if not None in [filenames, transforms] and len(filenames) != len(transforms):  # type: ignore
+        if None not in [filenames, transforms] and len(filenames) != len(transforms):  # type: ignore
             raise ValueError("The given filenames and transforms are not equally long.")
 
         # Map the given filenames and transforms (if any) to each other, or create an empty collection
-        self._inner_dict: dict[str, skimage.transform.EuclideanTransform] = dict(
-            zip(filenames, transforms)) if not None in [filenames, transforms] else {}  # type: ignore
+        self._inner_dict: dict[str, skimage.transform.EuclideanTransform] =\
+            dict(zip(filenames, transforms)) if None not in [filenames, transforms] else {}  # type: ignore
 
         self.frame_type = frame_type
 
@@ -416,7 +416,6 @@ def generate_reference_frame(image_transforms: ImageTransforms) -> np.ndarray:
     # Set the shape of all the images to match the first one. TODO: Make this an argument?
     first_image = load_image(image_transforms.keys()[0])
     output_shape = first_image.shape
-    output_dtype = first_image.dtype
 
     # Instantiate a progress bar.
     progress_bar = tqdm(total=len(image_transforms.keys()), desc="Transforming images")
@@ -570,9 +569,6 @@ def extract_fiducials(image: np.ndarray, frame_type: str, window_size: int = 250
         # Optionally stretch the lighness to between the 1st and 99th percentile of the lightness
         if equalize:
             min_value = np.percentile(fiducial.flatten(), 10)
-            #max_value = np.percentile(fiducial.flatten(), 90)
-            # fiducial = np.clip((fiducial - min_value) * (255 / (max_value - min_value)),
-            #                   a_min=0, a_max=255).astype(fiducial.dtype)
             fiducial = cv2.threshold(
                 src=np.clip(fiducial - min_value, a_min=0, a_max=255),
                 thresh=40,
@@ -785,7 +781,7 @@ def merge_manual_and_estimated_transforms(manual_transforms: ImageTransforms,
     merged_transforms.estimated_residuals = merged_transforms.manual_residuals.copy()
 
     # Generate a list of filenames that can replace the estimated if needed
-    manually_picked_filenames: list[str] = manual_transforms.keys()
+    manually_picked_filenames: list[str] = list(manual_transforms.keys())
 
     # Loop over all filenames and add the appropriate version (manual/estimated) to merged_transforms
     for i, filename in enumerate(estimated_transforms.keys()):
@@ -872,6 +868,7 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
             frame_type=instruments[instrument]
         ) for instrument in instruments
     }
+
     # Extract fiducial templates from each instrument to use with the feature matching.
     fiducial_templates = {
         instrument: get_fiducial_templates(
@@ -892,6 +889,13 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
             cache=True
         ) for instrument in instruments
     }
+    count_with_four = 0
+    count_with_three = 0
+    for key in estimated_transforms:
+        res = estimated_transforms[key].estimated_residuals
+        nan_count = np.count_nonzero(np.isnan(res), axis=1)
+        count_with_four += nan_count[nan_count == 0].shape[0]
+        count_with_three += nan_count[nan_count == 1].shape[0]
 
     # Replace the poorly estimated transforms with manual transforms
     merged_transforms = {
@@ -901,13 +905,23 @@ def get_all_instrument_transforms(complement: bool = False, verbose: bool = True
         ) for instrument in instruments
     }
 
+    count_with_two_manual = 0
+    for key in merged_transforms:
+        res = merged_transforms[key].manual_residuals
+        if res is None:
+            continue
+        nan_count = np.count_nonzero(np.isnan(res), axis=1)
+        count_with_two_manual += nan_count[nan_count == 2].shape[0]
+
+    print(f"{count_with_four=}, {count_with_three=}, {count_with_two_manual=}")
+
     if verbose:
         rmses: list[float] = []
         for instrument in instruments:
             rms = compare_transforms(manual_transforms[instrument], estimated_transforms[instrument])
             rmses.append(rms)
             print(f"{instrument} manual-to-estimated error: {rms:.2f} px")
-        print(f"\nMean manual-to-estimated error: {np.mean(rmses):.2f} px\n")
+        print(f"\nMedian manual-to-estimated error: {np.median(rmses):.2f} px\n")
 
         for key in merged_transforms:
             print(key, "\t\t", merged_transforms[key])
@@ -1020,6 +1034,7 @@ def save_all_fiducial_locations(image_transforms: ImageTransforms) -> dict[str, 
 
 
 if __name__ == "__main__":
-    transforms = get_all_instrument_transforms(complement=False, verbose=False)
+    transforms = get_all_instrument_transforms(complement=False, verbose=True, cache=False)
 
-    save_all_fiducial_locations(transforms)
+    print(transforms)
+    # save_all_fiducial_locations(transforms)

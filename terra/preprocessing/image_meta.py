@@ -13,7 +13,12 @@ CACHE_FILES = {
 
 
 def collect_metadata(use_cached=True) -> pd.DataFrame:
+    """
+    Collect the image metadata into one DataFrame.
 
+    :param use_cached: Use a cached version if available.
+    :returns: The merged DataFrame.
+    """
     if os.path.isfile(CACHE_FILES["image_meta"]) and use_cached:
         metadata = pd.read_pickle(CACHE_FILES["image_meta"])
         print(f"Loaded cached image metadata with {metadata.shape[0]} entries.")
@@ -21,7 +26,7 @@ def collect_metadata(use_cached=True) -> pd.DataFrame:
 
     metadata = pd.DataFrame()
     print("Reading image metadata from files")
-    for i, filename in enumerate(tqdm(list(files.list_image_meta_paths()))):
+    for filename in tqdm(list(files.list_image_meta_paths())):
         meta = pd.read_csv(filename, engine="python", skiprows=11, sep=":   ",
                            index_col=0, squeeze=True).dropna()
 

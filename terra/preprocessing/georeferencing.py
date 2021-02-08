@@ -16,7 +16,7 @@ import pandas as pd
 import rasterio as rio
 import scipy.interpolate
 
-from terra import files, preprocessing
+from terra import base_dem, files, preprocessing
 from terra.constants import CONSTANTS
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "preprocessing")
@@ -45,7 +45,7 @@ def get_slope_and_aspect(redo: bool = False) -> tuple[rio.DatasetReader, rio.Dat
         if os.path.isfile(filepath) and not redo:
             continue
         # Use gdal to create the map
-        gdal_commands = ["gdaldem", name, files.INPUT_FILES["base_DEM"],
+        gdal_commands = ["gdaldem", name, base_dem.CACHE_FILES["base_dem"],
                          filepath, "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=YES"]
         print(f"Generating {name} map")
         subprocess.run(gdal_commands, check=True)
@@ -75,11 +75,12 @@ def correct_metadata_coordinates(old_camera_locations: pd.DataFrame,
     cameras_on_terrain["elevation"] = cameras_on_terrain["altitude"] - CONSTANTS.tripod_height
 
     # Open the DEM and read elevation values from it
-    with rio.open(files.INPUT_FILES["base_DEM"]) as base_dem:
-        cameras_on_terrain["dem_elevation"] = np.fromiter(base_dem.sample(
+    with rio.open(base_dem.CACHE_FILES["base_dem"]) as base_dem_dataset:
+        cameras_on_terrain["dem_elevation"] = np.fromiter(base_dem_dataset.sample(
             cameras_on_terrain[["easting", "northing"]].values, indexes=1), dtype=np.float64)
         # Set values that are approximately nodata to nan
-        cameras_on_terrain.loc[cameras_on_terrain["dem_elevation"] < base_dem.nodata + 100, "dem_elevation"] = np.nan
+        cameras_on_terrain.loc[cameras_on_terrain["dem_elevation"] <
+                               base_dem_dataset.nodata + 100, "dem_elevation"] = np.nan
 
     # Read/create the slope and aspect maps
     slope, aspect = get_slope_and_aspect()
