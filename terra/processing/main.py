@@ -54,6 +54,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
 
     # Make sure that the region is representative of the dataset.
     chunk.resetRegion()
+    chunk.region.size *= 2
 
     # Get the names of the stereo-pairs
     pairs = metashape_tools.get_chunk_stereo_pairs(chunk)
@@ -89,6 +90,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
             chunk.remove(dem)
 
         chunk.resetRegion()
+        chunk.region.size *= 2
         log(dataset, "Coalignment successful")
     else:
         log(dataset, "Coalignment already exists")

@@ -236,19 +236,20 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
     # Add each instrument in the dataset as a different sensor
     # TODO: Maybe remove this as instruments are now always processed separately?
     sensors = {}
-    for instrument, dataframe in image_meta.groupby("Instrument"):
+    for focal_length, dataframe in image_meta.groupby("focal_length"):
         sensor = chunk.addSensor()
         sensor.film_camera = True
-        sensor.label = instrument
+        sensor.label = dataframe["Instrument"].iloc[0] + "_" + str(int(focal_length)) + "mm"
 
         sensor.pixel_size = ms.Vector([CONSTANTS.scanning_resolution * 1e3] * 2)
-        sensor.focal_length = dataframe.iloc[0]["focal_length"]
+        sensor.focal_length = focal_length  # dataframe.iloc[0]["focal_length"]
         import_fiducials(chunk, sensor)
 
         sensors[sensor.label] = sensor
 
     for camera in chunk.cameras:
-        sensor_name = image_meta[image_meta["Image file"].str.replace(".tif", "") == camera.label].iloc[0]["Instrument"]
+        cam_meta = image_meta[image_meta["Image file"].str.replace(".tif", "") == camera.label].iloc[0]
+        sensor_name = f"{cam_meta['Instrument']}_{int(cam_meta['focal_length'])}mm"
         camera.sensor = sensors[sensor_name]
 
     # This should not be done anymore as the import_fiducials gives the right mm size data now
@@ -279,8 +280,8 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
         camera.reference.rotation_enabled = True
 
     with no_stdout():
-        chunk.importMasks(path=os.path.join(masks.CACHE_FILES["mask_dir"], "{filename}.tif"),
-                          source=ms.MaskSource.MaskSourceFile, operation=ms.MaskOperation.MaskOperationReplacement)
+        chunk.generateMasks(path=os.path.join(masks.CACHE_FILES["mask_dir"], "{filename}.tif"),
+                            masking_mode=ms.MaskingMode.MaskingModeFile, mask_operation=ms.MaskOperation.MaskOperationReplacement)
     return chunk
 
 
@@ -430,7 +431,7 @@ def load_or_remake_chunk(doc: ms.Document, dataset: str) -> ms.Chunk:
     aligned_chunks: list[ms.Chunk] = []
     progress_bar = tqdm(total=np.unique(image_meta["Base number"]).shape[0])
     # Loop through all stations (stereo-pairs) and align them if they don't already exist
-    for station_number, station_meta in tqdm(image_meta.groupby("Base number")):
+    for station_number, station_meta in image_meta.groupby("Base number"):
         progress_bar.desc = f"Aligning station {station_number}"
         # Check if a "stereo-pair" only has the right or left position (so it's not a stereo-pair)
         if station_meta["Position"].unique().shape[0] < 2:
@@ -651,10 +652,15 @@ def build_dense_clouds(doc: ms.Document, chunk: ms.Chunk, pairs: list[str], qual
         for camera in chunk.cameras:
             # Set it as enabled if the camera group label fits with the stereo pair label
             camera.enabled = camera in cameras
-        with no_stdout():
-            chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
         try:
             with no_stdout():
+                chunk.buildDepthMaps(downscale=quality.value, filter_mode=filtering.value)
+        except RuntimeError as exception:
+            if "Assertion 23910910009 failed" in str(exception):
+                raise ValueError("Zero resolution error. Last time it was because of Metashape 1.7.0.")
+            raise exception
+        try:
+            with no_stdout(disable=False):
                 chunk.buildDenseCloud(point_confidence=True)
         except MemoryError:
             warnings.warn(f"Memory error on dense cloud for {label} in {chunk.meta['dataset']}")
