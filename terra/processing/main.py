@@ -88,6 +88,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         for dem in chunk.elevations:
             chunk.remove(dem)
 
+        chunk.resetRegion()
         log(dataset, "Coalignment successful")
     else:
         log(dataset, "Coalignment already exists")
@@ -149,6 +150,13 @@ def process_dataset(dataset: str, redo: bool = False):
     # This is basically just a wrapper for run_processing_pipeline, but with logging functionality for exceptions.
     try:
         run_processing_pipeline(dataset, redo=redo)
+    # A weird error comes up sometimes on invalid (?) dense clouds.
+    except RuntimeError as exception:
+        if "Assertion 23910910127 failed" in str(exception):
+            print(exception)
+            log(dataset, "Processing failed")
+            return
+        raise exception
     except Exception as exception:
         log(dataset, "Processing failed")
         raise exception
