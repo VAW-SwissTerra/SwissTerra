@@ -5,9 +5,11 @@ import argparse
 import os
 import subprocess
 import time
+import warnings
 from typing import List
 
-from terra import dem_tools, files, orthomosaics, preprocessing, processing
+from terra import (dem_tools, files, orthomosaics, preprocessing, processing,
+                   utilities)
 
 
 def main():
@@ -96,6 +98,17 @@ def parse_args():
                                             help="Data evaluation.", description="Processed data evaluation.")
     evaluation_parser.add_argument("action", help=generate_help_text(choices), metavar="action", choices=choices.keys())
     evaluation_parser.set_defaults(func=evaluation_commands)
+
+    # Deployment
+    choices = {
+        "queue": "Process datasets in the queue.",
+        "is_idle": "Check if a dataset is processed in the queue.",
+        "list_finished": "List all of the finished datasets."
+    }
+    deploy_parser = commands.add_parser("deploy", formatter_class=argparse.RawTextHelpFormatter,
+                                        help="Processing deployment functions")
+    deploy_parser.add_argument("action", help=generate_help_text(choices), metavar="action", choices=choices.keys())
+    deploy_parser.set_defaults(func=deploy_commands)
 
     return parser.parse_args()
 
@@ -215,3 +228,41 @@ def evaluation_commands(args):
         dem_tools.coregister_and_merge_ddems()
     elif args.action == "transform-ortho":
         orthomosaics.apply_coregistrations()
+
+
+def deploy_commands(args):
+
+    if args.action == "queue":
+        # Check if any datasets are in the queue.
+        if len(utilities.read_queue()) == 0:
+            warnings.warn("Process queue is empty or file is nonexistent.")
+        # Say that the machine is idle
+        utilities.set_deployment_idle_status(True)
+        while True:
+            queue = utilities.read_queue()
+
+            # Find each dataset that has not been finished and process it.
+            for dataset in queue:
+                if processing.processing_tools.is_dataset_finished(dataset):
+                    continue
+                # Say that the machine is no longer idle.
+                utilities.set_deployment_idle_status(False)
+                print(f"\nProcessing {dataset}\n")
+                try:
+                    processing.main.process_dataset(dataset)
+                except Exception as exception:
+                    # Say that the machine is idle if it errors out.
+                    utilities.set_deployment_idle_status(True)
+                    raise exception
+            # Say that the machine is idle if it finished its queue.
+            utilities.set_deployment_idle_status(True)
+            time.sleep(60)
+    elif args.action == "is_idle":
+        status = utilities.get_deployment_idle_status()
+        print(status)
+
+    elif args.action == "list_finished":
+        for dataset in processing.inputs.get_dataset_names():
+            if not processing.processing_tools.is_dataset_finished(dataset):
+                continue
+            print(dataset)

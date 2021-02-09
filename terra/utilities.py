@@ -10,6 +10,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
+import jinja2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -193,3 +194,55 @@ def plot_progress_map():
     plt.xlim(hillshade.bounds.left, hillshade.bounds.right)
     plt.title(f"Last dataset: {dataset}. Easting: {min_easting:.0f} m.")
     plt.show()
+
+
+def deploy_datasets(ssh_host: str, datasets: list[str]):
+
+    command = jinja2.Template("""bash -c 'ssh {{ ssh_host }} 'tmux new -n SwissTerra -d '
+        cd ~/Projects/ETH/SwissTerra/
+        eval "$(conda shell.bash hook)"
+        conda activate swissterra
+        while read line; do
+            echo "processing $line" >> log.txt
+        done <<< "$(echo "{{ datasets }}" | tr ',' '\\n')"
+        '''
+        """).render(
+        ssh_host=ssh_host,
+        datasets=",".join(datasets)
+    )
+
+    subprocess.run(command, shell=True, check=True)
+
+
+def read_queue() -> list[str]:
+    """
+    Read the processing queue.
+
+    :returns: A list of dataset names, or an empty list if the queue file does not exist.
+    """
+    queue_file = "temp/queue/queue.txt"
+
+    if not os.path.isfile(queue_file):
+        return []
+
+    with open(queue_file) as infile:
+        queue = infile.read().splitlines()
+
+    return queue
+
+
+def set_deployment_idle_status(status: bool):
+    os.makedirs("temp/queue", exist_ok=True)
+    with open("temp/queue/idle.txt", "w") as outfile:
+        outfile.write(str(status))
+
+
+def get_deployment_idle_status() -> bool:
+
+    if not os.path.isfile("temp/queue/idle.txt"):
+        return True
+
+    with open("temp/queue/idle.txt") as infile:
+        status = bool(infile.read().strip())
+
+    return status
