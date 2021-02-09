@@ -77,7 +77,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         metashape_tools.stable_ground_registration(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
-        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=3)
+        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=4)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
 
         metashape_tools.save_document(doc)

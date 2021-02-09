@@ -510,6 +510,8 @@ def get_rms_marker_reprojection_errors(markers: list[ms.Marker]) -> dict[ms.Mark
             errors[marker].append(get_marker_reprojection_error(camera, marker))
 
     def rms(values: list[np.float64]):
+        if np.count_nonzero(~np.isnan(values)) == 0:
+            return np.nan
         return np.sqrt(np.nanmean(np.square(values))).astype(np.float64)
 
     mean_errors = {marker: rms(error_list) for marker, error_list in errors.items()}
@@ -1121,7 +1123,8 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
 
     def register_dem(pair: str):
         """Register a DEM in one thread."""
-        result = processing_tools.coalign_dems(reference_path=base_dem_paths[pair], aligned_path=dem_paths[pair])
+        result = processing_tools.coalign_dems(
+            reference_path=base_dem_paths[pair], aligned_path=dem_paths[pair], pixel_buffer=10)
         progress_bar.update()
 
         return result
