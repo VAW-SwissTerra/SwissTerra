@@ -68,11 +68,13 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         pairs_missing_clouds = metashape_tools.get_unfinished_pairs(chunk, metashape_tools.Step.DENSE_CLOUD)
         # Make missing dense clouds
         if len(pairs_missing_clouds) > 0:
-            metashape_tools.build_dense_clouds(doc, chunk, pairs=pairs_missing_clouds, quality=metashape_tools.Quality.ULTRA,
+            metashape_tools.build_dense_clouds(doc, chunk, pairs=pairs_missing_clouds,
+                                               quality=metashape_tools.Quality.ULTRA,
                                                filtering=metashape_tools.Filtering.MILD)
-        metashape_tools.save_document(doc)
+            metashape_tools.save_document(doc)
 
         # Coalign stereo-pair DEMs with each other and generate markers from their alignment
+        metashape_tools.stable_ground_registration(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
         metashape_tools.remove_bad_markers(chunk, marker_error_threshold=3)
@@ -158,6 +160,9 @@ def process_dataset(dataset: str, redo: bool = False):
     try:
         run_processing_pipeline(dataset, redo=redo)
     # A weird error comes up sometimes on invalid (?) dense clouds.
+    except KeyboardInterrupt as exception:
+        log(dataset, "Processing cancelled")
+        raise exception
     except RuntimeError as exception:
         if "Assertion 23910910127 failed" in str(exception):
             print(exception)

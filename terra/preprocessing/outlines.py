@@ -170,6 +170,8 @@ def read_stable_ground_mask(bounds: dict[str, float], resolution: float = CONSTA
     """
     Read and crop/resample the stable ground mask to the given bounds and resolution.
 
+    The array is True where there is stable ground, and False where it is unstable.
+
     :param bounds: A dictionary with the keys: west, east, south, north.
     :param resolution: The target resolution of the mask.
     :returns: A boolean numpy array with a shape corresponding to the given bounds and resolution.

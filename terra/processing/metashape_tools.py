@@ -4,6 +4,8 @@ from __future__ import annotations
 import concurrent.futures
 import itertools
 import os
+import pickle
+import tempfile
 import warnings
 from enum import Enum
 from typing import Optional
@@ -13,7 +15,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from terra import files
+from terra import dem_tools, files
 from terra.constants import CONSTANTS
 from terra.preprocessing import fiducials, masks
 from terra.processing import inputs, processing_tools
@@ -926,7 +928,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
 
     # Coaling all DEM combinations
     # The results variable is a list of transforms from pair1 to pair2
-    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         results = list(executor.map(coalign_dems, path_combinations))
 
     progress_bar.close()
@@ -1084,6 +1086,205 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
 
                 for camera, projection in zip(cameras, projections):
                     marker.projections[camera] = ms.Marker.Projection(projection, True)
+
+        progress_bar.update()
+
+    progress_bar.close()
+
+
+def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: float = 20.0,
+                               tie_group_radius: float = 30.0, marker_pixel_accuracy=4.0):
+    """
+    Use DEM ICP coaligning to align stereo-pairs to a stable ground reference.
+
+    :param chunk: The chunk to analyse.
+    :param pairs: The stereo-pairs to coaling.
+    :param max_fitness: The maximum allowed PDAL ICP fitness parameters (presumed to be C2C distance in m)
+    :param tie_group_radius: The distance of all tie points from the centroid of the alignment.
+    :param marker_pixel_accuracy: The approximate accuracy in pixels to give to Metashape.
+    """
+    if chunk.meta["dataset"] is None:
+        raise ValueError("Chunk dataset meta is undefined")
+    # Build DEMs to subsequently coalign
+    dem_paths = build_dems(chunk, pairs=pairs)
+    pairs_with_dem = list(dem_paths.keys())
+
+    temp_dir = tempfile.TemporaryDirectory()
+    base_dem_paths: dict[str, str] = {}
+    for pair, dem_path in tqdm(dem_paths.items(), desc="Extracting base DEM subsets"):
+        base_dem_path = os.path.join(temp_dir.name, f"{pair}_base_dem.tif")
+        dem_tools.extract_base_stable_ground(dem_path, base_dem_path, buffer=40)
+        base_dem_paths[pair] = base_dem_path
+
+    # Start a progress bar for the DEM coaligning
+    progress_bar = tqdm(total=len(dem_paths), desc="Registering to base DEM")
+
+    def register_dem(pair: str):
+        """Register a DEM in one thread."""
+        result = processing_tools.coalign_dems(reference_path=base_dem_paths[pair], aligned_path=dem_paths[pair])
+        progress_bar.update()
+
+        return result
+
+    # Coaling all DEM combinations
+    # The results variable is a list of all resultant transforms.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        results = list(executor.map(register_dem, pairs_with_dem))
+
+    progress_bar.close()
+
+    # Run through each combination of stereo-pairs and try to apply the registration results
+    progress_bar = tqdm(total=len(pairs_with_dem))
+    for i, pair in enumerate(pairs_with_dem):
+        # Update the progress bar description
+        progress_bar.desc = f"Processing results for {pair}"
+        # Exctract the corresponding result
+        result = results[i]
+        # Skip if coalignment was not possible
+        if result is None:
+            progress_bar.update()
+            continue
+
+        # Skip if the coalignment fitness was poor. I think e.g. 10 means 10 m of offset
+        if result["fitness"] > max_fitness:
+            progress_bar.update()
+            print(f"{pair} fitness exceeded threshold: {result['fitness']}")
+            continue
+
+        # Get the ICP centroid as a numpy array (x, y, z) and create tie points from it
+        centroid = np.array([float(value) for value in result["centroid"].splitlines()])
+        # Offsets to change the centroid (first offsets the x coordinate, third offsets the y coordinate, etc.)
+        offsets = [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 0]
+        ]
+        # Create rows for pandas DataFrames by multiplying the centroid with corresponding offsets
+        rows = [centroid + np.array(offset) * tie_group_radius for offset in offsets]
+        # Make a source point position DataFrame from the centroid-centered points
+        # These will be the initial positions of the points (after which reference information is given).
+        source_point_positions = pd.DataFrame(data=rows, columns=["X", "Y", "Z"])
+
+        # Transform the source points to the reference coordinates using the ICP transform
+        # These will be the GCP location data.
+        destination_point_positions = processing_tools.transform_points(
+            source_point_positions, result["composed"], inverse=False)
+
+        def global_to_local(row: pd.Series) -> pd.Series:
+            """Convert global coordinates in a pandas row to local coordinates."""
+            global_coord = ms.Vector(row[["X", "Y", "Z"]].values)
+
+            # Transform it using the inverse transform matrix of the unprojected coordinate. Geez.
+            local_coord = chunk.transform.matrix.inv().mulp(chunk.crs.unproject(global_coord))
+
+            # Make a new identical row, but with new values. This may be replaced by just new_row = list(local_coord)
+            new_row = pd.Series(data=list(local_coord), index=["X", "Y", "Z"])
+
+            return new_row
+
+        # Convert the point positions to local coordinates (so point projections can be made)
+        local_source_positions = source_point_positions.apply(global_to_local, axis=1)
+
+        def is_projection_valid(camera: ms.Camera, projected_position: ms.Vector) -> bool:
+            """
+            Check if a camera projection is valid, e.g. if it's not outside the camera bounds.
+
+            :param camera: The camera to check the projection validity on.
+            :param projected_position: The pixel position of the projection to evaluate.
+
+            :returns: If the projection seems valid or not.
+            """
+            if projected_position is None:
+                return False
+            # Check if the pixel locations are negative (meaning it's invalid)
+            if projected_position.x < 0 or projected_position.y < 0:
+                return False
+
+            # Check if the projected x position is bigger than the image width
+            if projected_position.x > int(camera.photo.meta["File/ImageWidth"]):
+                return False
+            # Check if the projected y position is bigger than the image height
+            if projected_position.y > int(camera.photo.meta["File/ImageHeight"]):
+                return False
+
+            # Assume that the projection is valid if it didn't fill any of the above criterai
+            return True
+
+        def find_good_cameras(pair: str, positions: pd.DataFrame) -> list[ms.Camera]:
+            """
+            Find a camera that can "see" all the given positions.
+
+            :param pair: Which stereo-pair to look for a camera in.
+            :param positions: The positions to check if they are visible or not.
+
+            :returns: A camera that can "see" all the given positions.
+            """
+            cameras_in_pair = [camera for camera in chunk.cameras if pair in camera.group.label]
+
+            # Make a count for how many positions the camera can "see", starting at zero
+            n_valid = {camera: 0 for camera in cameras_in_pair}
+
+            # Go through each camera and count the visibilities
+            for camera in cameras_in_pair:
+                # Go through each given position
+                for _, position in positions.iterrows():
+                    # Project the position onto the camera coordinate system
+                    projection = camera.project(position[["X", "Y", "Z"]].values)
+                    # Check if the projection was valid
+                    if is_projection_valid(camera, projection):
+                        n_valid[camera] += 1
+
+            # Find the cameras with valid at least n-1 projections valid (5 positions => 4 valid projections)
+            good_cameras = [camera for camera, n_valid_projections in n_valid.items(
+            ) if n_valid_projections >= (positions.shape[0] - 1)]
+
+            return good_cameras
+
+        # Find all the cameras that can "see" the local source coordinates.
+        cameras = find_good_cameras(pair, local_source_positions)
+
+        assert len(cameras) > 0
+
+        # Set the marker pixel accuracy
+        chunk.marker_projection_accuracy = marker_pixel_accuracy
+        chunk.marker_location_accuracy = [CONSTANTS.stable_ground_accuracy] * 3
+
+        # Go over each point position and make a Metashape marker from it if it's valid
+        for j in range(local_source_positions.shape[0]):
+            # Extract the local source position and the "global" destination position.
+            local_source_position = local_source_positions.iloc[j]
+            destination_position = destination_point_positions.iloc[j]
+
+            # Project the source positions
+            source_projections = [camera.project(local_source_position) for camera in cameras]
+
+            # Double check that the projections are valid
+            projection_validity: dict[ms.Camera, bool] = {}
+            for camera, projection in zip(cameras, source_projections):
+                projection_validity[camera] = is_projection_valid(camera, projection)
+
+            # Check that at least two camera projections exist for a marker.
+            if np.count_nonzero(list(projection_validity.values())) < 2:
+                continue
+
+            error = round(float(result["fitness"]), 2)  # The "fitness" is presumed to be in m
+            marker_label = f"gcp_base_to_{pair}_num_{j}_fitness_{error}"
+            for marker in chunk.markers:
+                if marker_label[:marker_label.index("fitness")] in marker.label:
+                    chunk.remove(marker)
+            # Add a marker and set an appropriate label
+            marker = chunk.addMarker()
+            marker.label = marker_label
+
+            marker.reference.location = destination_position
+
+            # Set the projections
+            for camera, projection in zip(cameras, source_projections):
+                if not projection_validity[camera]:
+                    continue
+                marker.projections[camera] = ms.Marker.Projection(projection, True)
 
         progress_bar.update()
 

@@ -126,6 +126,40 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
     return reference_elevation
 
 
+def extract_base_stable_ground(reference_filepath: str, output_filepath: str, buffer: float):
+
+    ref_raster = rio.open(reference_filepath)
+    bounds = dict(zip(["west", "south", "east", "north"], list(ref_raster.bounds)))
+    larger_bounds = bounds.copy()
+    for key in ["west", "south"]:
+        larger_bounds[key] -= CONSTANTS.dem_resolution + buffer
+    for key in ["east", "north"]:
+        larger_bounds[key] += CONSTANTS.dem_resolution + buffer
+
+    # Crop the very large reference DEM to the expanded bounds.
+    gdal_commands = [
+        "gdal_translate",
+        "-projwin",
+        larger_bounds["west"],
+        larger_bounds["north"],
+        larger_bounds["east"],
+        larger_bounds["south"],
+        base_dem.CACHE_FILES["base_dem"],
+        output_filepath
+    ]
+    subprocess.run(list(map(str, gdal_commands)), check=True, stdout=subprocess.PIPE)
+    stable_ground_mask = outlines.read_stable_ground_mask(larger_bounds, resolution=ref_raster.res[0])
+
+    with rio.open(output_filepath) as infile:
+        meta = infile.meta
+        elevation = infile.read(1)
+
+    elevation[~stable_ground_mask] = meta["nodata"]
+
+    with rio.open(output_filepath, mode="w", **meta) as outfile:
+        outfile.write(elevation, 1)
+
+
 def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILES["ddems_dir"]) -> Optional[np.ndarray]:
     """Compare the DEM difference between the reference DEM and the given filepath."""
     dem = rio.open(filepath)

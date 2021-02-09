@@ -82,7 +82,7 @@ def generate_dem(point_cloud_path: str, output_dem_path: str,
 
 
 def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
-        parameters: Optional[Dict[str, str]] = None, show_warnings: bool = False) -> Dict[str, Any]:
+                      parameters: Optional[Dict[str, str]] = None, show_warnings: bool = False) -> Dict[str, Any]:
     """
     Run a PDAL pipeline.
 
@@ -112,7 +112,8 @@ def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
 
     # Run PDAL with the pipeline as the stdin
     commands = ["pdal", "pipeline", "--stdin", "--metadata", os.path.join(temp_dir.name, "meta.json")]
-    stdout = subprocess.run(commands, input=pipeline, check=True, stdout=subprocess.PIPE, encoding="utf-8").stdout
+    stdout = subprocess.run(commands, input=pipeline, check=True, stdout=subprocess.PIPE,
+                            encoding="utf-8", stderr=subprocess.PIPE).stdout
 
     if show_warnings and len(stdout.strip()) != 0:
         print(stdout)
@@ -445,7 +446,8 @@ def show_processing_log():
             print(f"\t{date}\t{row['event']}")
         print(f"Duration: {processing_time}\n")
 
-    n_dems = len([filepath for filepath in os.listdir("export/dems") if ".tif" in filepath])
+    dem_dir = os.path.join(inputs.TEMP_DIRECTORY, "output/dems")
+    n_dems = len([filepath for filepath in os.listdir(dem_dir) if ".tif" in filepath]) if os.path.isdir(dem_dir) else 0
     print(f"Currently at {n_dems} DEMs")
 
 
