@@ -1146,6 +1146,7 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
         # Skip if coalignment was not possible
         if result is None:
             progress_bar.update()
+            print("Registration not possible")
             continue
 
         # Skip if the coalignment fitness was poor. I think e.g. 10 means 10 m of offset

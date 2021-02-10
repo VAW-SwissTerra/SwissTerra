@@ -77,7 +77,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         metashape_tools.stable_ground_registration(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
-        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=4)
+        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=6)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
 
         metashape_tools.save_document(doc)
@@ -116,7 +116,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     missing_dem_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DEM)
     if len(missing_dem_pairs) > 0:
         print(f"Building {len(missing_dem_pairs)} DEMs")
-        dem_filepaths = metashape_tools.build_dems(chunk=chunk, pairs=missing_dem_pairs)
+        dem_filepaths = metashape_tools.build_dems(chunk=chunk, pairs=missing_dem_pairs, redo=True)
         log(dataset, f"Made {len(dem_filepaths)} DEMs")
 
         # Copy the DEMs to the export directory
