@@ -480,8 +480,14 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
     # Validate that both the marker and the camera is not None
     if None in [camera, marker]:
         return np.NaN
+    if marker.position is None:
+        return np.NaN
     projected_position = marker.projections[camera].coord
-    reprojected_position = camera.project(marker.position)
+    try:
+        reprojected_position = camera.project(marker.position)
+    except TypeError:
+        print(marker.position)
+        return np.NaN
 
     if reprojected_position is None:
         return np.NaN
