@@ -14,10 +14,12 @@ import numpy as np
 import pandas as pd
 import rasterio as rio
 import shapely
+import shapely.geometry
 import shapely.ops
+import skimage.graph
 from tqdm import tqdm
 
-from terra import base_dem, files, utilities
+from terra import base_dem, dem_tools, files, utilities
 from terra.constants import CONSTANTS
 from terra.preprocessing import image_meta
 
@@ -26,6 +28,7 @@ CACHE_FILES = {
     "glacier_mask": os.path.join(TEMP_DIRECTORY, "glacier_mask.tif"),
     "stable_ground_mask": os.path.join(TEMP_DIRECTORY, "stable_ground_mask.tif"),
     "lk50_outlines": os.path.join(TEMP_DIRECTORY, "lk50_outlines.shp"),
+    "lk50_centrelines": os.path.join(TEMP_DIRECTORY, "lk50_centrelines.shp"),
 }
 
 
@@ -261,7 +264,7 @@ def fix_lk50_outlines():
     # Read the 1973 outlines to make sure the new geometry is consistently larger or the same as in 1973
     sgi_1973 = gpd.read_file(files.INPUT_FILES["sgi_1973"]).to_crs(lk50_sgi1973.crs)
     # Read the 1850 ouitlines to make sure the new geometry is consistently smaller or the same as in 1850
-    sgi_1850 = gpd.read_file(files.INPUT_FILES["sgi_1850"]).to_crs(lk50_sgi1973.crs)
+    # sgi_1850 = gpd.read_file(files.INPUT_FILES["sgi_1850"]).to_crs(lk50_sgi1973.crs)
     image_metadata = image_meta.read_metadata()
 
     lk50 = gpd.GeoDataFrame(columns=list(merged_parent_lk50.columns) +
@@ -288,48 +291,6 @@ def fix_lk50_outlines():
         if changed_from_1973:
             fixed_geom = glacier.geometry.union(glacier_1973.geometry)
 
-            # First try to find the 1850 parent
-            potential_glacier_1850 = sgi_1850.loc[sgi_1850["SGI"] == glacier["Parent1850"]]
-            # If that doesn't work, try to find the 1850 glacier by its SGI id
-            # if potential_glacier_1850.shape[0] == 0:
-            #    potential_glacier_1850 = sgi_1850.loc[sgi_1850["SGI"] == glacier["SGI"]]
-            # If that succeeded, fix so the glacier's extent does not extend farther than in 1850.
-            if potential_glacier_1850.shape[0] != 0:
-                glacier_1850 = potential_glacier_1850.iloc[0].copy()
-                # Merge geometries if there are more than one SGI entries of the same name
-                if potential_glacier_1850.shape[0] > 1:
-                    for j in range(1, potential_glacier_1850.shape[0]):
-                        geom = potential_glacier_1850.iloc[j].geometry.buffer(0)
-                        if geom not in ["MultiPolygon", "Polygon"]:
-                            continue
-                        glacier_1850.geometry = glacier_1850.geometry.union(geom)
-                geoms1850 = [glacier_1850.geometry] if glacier_1850.geometry.geom_type == "Polygon"\
-                    else glacier_1850.geometry
-
-                new_geom = shapely.geometry.Polygon()
-                new_geom_modified = False
-                old_geom = fixed_geom if fixed_geom.geom_type == "MultiPolygon" else [fixed_geom]
-                for old_g in old_geom:
-                    if old_g.geom_type not in ["MultiPolygon", "Polygon"]:
-                        continue
-                    for geom in geoms1850:
-                        if geom.geom_type not in ["MultiPolygon", "Polygon"]:
-                            continue
-                        diff = geom.buffer(0).difference(old_g.buffer(0)).buffer(0)
-                        if geom.geom_type not in ["MultiPolygon", "Polygon"]:
-                            continue
-                        try:
-                            intersection = old_g.buffer(0).difference(diff)
-                        except shapely.errors.TopologicalError:
-                            continue
-                        if intersection.geom_type not in ["MultiPolygon", "Polygon"]:
-                            continue
-
-                        new_geom_modified = True
-                        new_geom = new_geom.union(intersection)
-                if new_geom_modified:
-                    fixed_geom = new_geom
-
             if fixed_geom.geom_type not in ["MultiPolygon", "Polygon"]:
                 continue
 
@@ -350,5 +311,88 @@ def fix_lk50_outlines():
     print(lk50)
 
 
+def generate_lk50_centrelines():
+    """
+    ADD THIS
+    """
+    lk50 = gpd.read_file(CACHE_FILES["lk50_outlines"])
+    centrelines_2016 = gpd.read_file(files.INPUT_FILES["centrelines_2016"]).to_crs(lk50.crs)
+    centrelines_lk50 = gpd.GeoDataFrame(columns=["SGI", "geometry"], crs=lk50.crs)
+    ref_dem = rio.open(base_dem.CACHE_FILES["base_dem"])
+    #full_elevation = ref_dem.read(1)
+
+    #assert full_elevation.shape == full_glacier_mask.shape
+
+    assert lk50.shape[0] == lk50["SGI"].unique().shape[0]
+
+    for sgi_id in tqdm(lk50["SGI"].unique()):
+        sgi_id = "B36-26"
+        temp_dir = tempfile.TemporaryDirectory()
+        ref_dem_path = os.path.join(temp_dir.name, "ref_dem.tif")
+
+        glacier_1927 = lk50.loc[lk50["SGI"] == sgi_id].iloc[0]
+        glacier_centrelines_2016 = centrelines_2016.loc[centrelines_2016["sgi-id"] == sgi_id].copy()
+        if glacier_centrelines_2016.shape[0] == 0:
+            continue
+
+        glacier_centrelines_2016["within"] = glacier_centrelines_2016.geometry.within(glacier_1927.geometry)
+        glacier_centrelines_2016["length"] = glacier_centrelines_2016.geometry.length
+        try:
+            centreline_2016 = glacier_centrelines_2016[glacier_centrelines_2016["within"]].sort_values(
+                "length").iloc[-1]
+        except IndexError:
+            continue
+
+        #bounds = dict(zip(["west", "south", "east", "north"], list(glacier_1927.geometry.bounds)))
+        # for key in bounds:
+        #    bounds[key] = bounds[key] - bounds[key] % CONSTANTS.dem_resolution
+
+        #bounds["east"] += CONSTANTS.dem_resolution
+        #bounds["north"] += CONSTANTS.dem_resolution
+        #bounds["west"] += CONSTANTS.dem_resolution
+        #bounds["north"] += CONSTANTS.dem_resolution
+
+        glacier_mask, _, window = rio.mask.raster_geometry_mask(ref_dem, (glacier_1927.geometry,), crop=True)
+        ref_elevation = ref_dem.read(1, window=window)
+        cropped_1927 = ref_elevation.copy()
+        cropped_1927[glacier_mask] = np.nan
+
+        assert cropped_1927.shape == ref_elevation.shape
+
+        start_point_coord = centreline_2016.geometry.xy[0][-1], centreline_2016.geometry.xy[1][-1]
+        start_point_indices = ref_dem.index(start_point_coord[0], start_point_coord[1], precision=0)
+        start_point = (start_point_indices[0] - window.row_off, start_point_indices[1] - window.col_off)
+
+        end_point = np.argwhere(cropped_1927 == np.nanmin(cropped_1927))[0]
+        slope = np.rad2deg(np.arctan(np.linalg.norm(np.gradient(ref_elevation), axis=0)))
+        try:
+            path = skimage.graph.route_through_array(slope, start_point, end_point)[0]
+        except ValueError as exception:
+            print(ref_elevation.shape, start_point, end_point)
+            raise exception
+
+        coordinates: list[shapely.geometry.Point] = []
+        for easting, northing in zip(centreline_2016.geometry.xy[0], centreline_2016.geometry.xy[1]):
+            coordinates.append(shapely.geometry.Point(easting, northing))
+        for row, col in path:
+            easting, northing = ref_dem.xy(row, col)
+            coordinates.append(shapely.geometry.Point(easting, northing))
+
+        lk50_centreline = shapely.geometry.LineString(coordinates)
+
+        centrelines_lk50.loc[centrelines_lk50.shape[0]] = sgi_id, lk50_centreline
+
+        # ref_dem.close()
+        # temp_dir.cleanup()
+
+    print("Simplifying geometry")
+
+    print(centrelines_lk50)
+    centrelines_lk50.geometry = centrelines_lk50.geometry.simplify(tolerance=50, preserve_topology=True)
+
+    centrelines_lk50.to_file(CACHE_FILES["lk50_centrelines"])
+
+
 if __name__ == "__main__":
-    fix_lk50_outlines()
+    try_pysheds()
+    # fix_lk50_outlines()

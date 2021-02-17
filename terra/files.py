@@ -40,6 +40,7 @@ INPUT_FILES = {
     "base_DEM": "basedata/swissALTI3D_pr2019_LV95.tif",
     "lake_outlines": "shapefiles/swissTLM3D_lakes.shp",
     "massbalance_index": "massbalance_index.dat",
+    "centrelines_2016": "shapefiles/SGI_2016_centerlines.shp"
 }
 # Prepend the directory and file paths with the input root directory path.
 INPUT_DIRECTORIES = {key: os.path.join(INPUT_ROOT_DIRECTORY, value) for key, value in INPUT_DIRECTORIES.items()}
