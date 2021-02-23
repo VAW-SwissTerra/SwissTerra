@@ -20,6 +20,7 @@ TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "evaluation")
 CACHE_FILES = {
     "metashape_dems_dir": os.path.join(inputs.TEMP_DIRECTORY, "output/dems"),
     "ddems_dir": os.path.join(TEMP_DIRECTORY, "ddems/"),
+    "yearly_ddems_dir": os.path.join(TEMP_DIRECTORY, "yearly_ddems"),
     "ddems_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg_ddems/"),
     "ddems_yearly_coreg_dir": os.path.join(TEMP_DIRECTORY, "yearly_coreg_ddems/"),
     "dem_coreg_dir": os.path.join(TEMP_DIRECTORY, "coreg/"),
@@ -111,7 +112,7 @@ def load_reference_elevation(bounds: dict[str, float], resolution: float = CONST
         base_dem.CACHE_FILES[base_dem_prefix],
         temp_dem_path
     ]
-    subprocess.run(list(map(str, gdal_commands)), check=True, stdout=subprocess.PIPE)
+    subprocess.run(list(map(str, gdal_commands)), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     # Open the cropped DEM in rasterio and resample it to fit the bounds perfectly.
     reference_dem = rio.open(temp_dem_path)
@@ -220,6 +221,12 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
     dem_elevation[~stable_ground_mask] = np.nan
     cropped_reference_dem[~stable_ground_mask] = np.nan
 
+    # Calculate the bias between the two products before coregistration
+    # ICP works better if this bias is first accounted for.
+    bias = np.nanmedian(cropped_reference_dem) - np.nanmedian(stable_ground_mask)
+
+    dem_elevation -= bias
+
     if np.all(np.isnan(cropped_reference_dem)):
         return None
 
@@ -281,6 +288,10 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
                 "limits": "Z[-999:MAX_HEIGHT]"
             },
             {
+                "type":"filters.transformation",
+                "matrix":"1  0  0  0  0  1  0  0  0  0  1  BIAS  0  0  0  1"
+            },
+            {
                 "type": "filters.transformation",
                 "matrix": "MATRIX"
             },
@@ -297,6 +308,7 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
         parameters={
             "INFILE": filepath,
             "MAX_HEIGHT": str(CONSTANTS.max_height),
+            "BIAS": -bias,
             "MATRIX": stats["composed"].replace("\n", " "),
             "RESOLUTION": str(CONSTANTS.dem_resolution),
             "WEST": bounds["west"],
@@ -311,6 +323,7 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
 
     # Count the overlapping pixels.
     stats["overlap"] = np.count_nonzero(np.isfinite(cropped_reference_dem) & np.isfinite(dem_elevation))
+    stats["bias"] = bias
     with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json"), "w") as outfile:
         json.dump(stats, outfile)
 
@@ -342,8 +355,7 @@ def coregister_all_dems(overwrite: bool = False) -> None:
         progress_bar.update()
 
 
-def generate_all_ddems(dem_dir: str = CACHE_FILES["dem_coreg_dir"],
-                       out_dir: str = CACHE_FILES["ddems_coreg_dir"], overwrite: bool = False) -> None:
+def generate_all_ddems(dem_dir: str, out_dir: str, overwrite: bool = False) -> None:
     """
     Generate dDEMs for all DEMs in a directory.
 
@@ -383,23 +395,23 @@ def read_and_crop_glacier_mask(raster: rio.DatasetReader, resampling=rio.warp.Re
     return cropped_glacier_mask
 
 
-def make_yearly_ddems(overwrite: bool = False):
+def make_yearly_ddems(input_dir: str, output_dir: str, overwrite: bool = False):
     """
     Generate yearly dDEMs from their given date difference.
 
     :param overwrite: Overwrite already existing dDEMs?
     """
-    ddem_filepaths = find_dems(CACHE_FILES["ddems_coreg_dir"])
+    ddem_filepaths = find_dems(input_dir)
     image_metadata = image_meta.read_metadata()
     image_metadata["station_number"] = image_metadata["Base number"]\
         .str.replace("_A", "", regex=False)\
         .str.replace("_B", "", regex=False)\
             .astype(int)
 
-    os.makedirs(CACHE_FILES["ddems_yearly_coreg_dir"], exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     for filepath in tqdm(ddem_filepaths, desc="Making yearly dDEMs"):
         station_name = extract_station_name(filepath)
-        output_filepath = os.path.join(CACHE_FILES["ddems_yearly_coreg_dir"], f"{station_name}_yearly_ddem.tif")
+        output_filepath = os.path.join(output_dir, f"{station_name}_yearly_ddem.tif")
         if not overwrite and os.path.isfile(output_filepath):
             continue
         station_number = int(station_name.replace("station_", ""))
@@ -510,8 +522,8 @@ def coregister_and_merge_ddems(redo: bool = False):
     # Generate both the glacier mask and stable ground mask
     outlines.generate_stable_ground_mask(overwrite=redo)
     coregister_all_dems(overwrite=redo)
-    generate_all_ddems(overwrite=redo)
-    make_yearly_ddems(overwrite=redo)
+    generate_all_ddems(CACHE_FILES["dem_coreg_dir"], CACHE_FILES["ddems_coreg_dir"], overwrite=redo)
+    make_yearly_ddems(CACHE_FILES["ddems_coreg_dir"], CACHE_FILES["ddems_yearly_coreg_dir"], overwrite=redo)
 
     good_ddem_filepaths = evaluation.evaluate_ddems(improve=False)
     good_yearly_ddems = [
@@ -526,3 +538,13 @@ def coregister_and_merge_ddems(redo: bool = False):
         good_yearly_ddems,
         output_filepath=CACHE_FILES["merged_yearly_ddem"]
     )
+
+
+def merge_dems_and_generate_ddems(redo: bool = False):
+    # Generate both the glacier mask and stable ground mask
+    outlines.generate_stable_ground_mask(overwrite=redo)
+    generate_all_ddems(dem_dir=CACHE_FILES["metashape_dems_dir"], out_dir=CACHE_FILES["ddems_dir"], overwrite=redo)
+    make_yearly_ddems(CACHE_FILES["ddems_dir"], CACHE_FILES["yearly_ddems_dir"], overwrite=redo)
+
+    merge_rasters(find_dems(CACHE_FILES["ddems_dir"]), CACHE_FILES["merged_ddem"])
+    merge_rasters(find_dems(CACHE_FILES["yearly_ddems_dir"]), CACHE_FILES["merged_yearly_ddem"])

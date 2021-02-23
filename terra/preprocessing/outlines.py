@@ -139,7 +139,7 @@ def read_mask(filepath: str, bounds: dict[str, float], resolution: float = CONST
     # Make an Affine transform from the bounds and the new size
     dst_transform = rio.transform.from_bounds(**bounds, width=dst_shape[1], height=dst_shape[0])
     # Make an empty numpy array which will later be filled with elevation values
-    resampled_values = np.empty(dst_shape, mask.dtypes[0])
+    resampled_values = np.empty(dst_shape, np.float32)
     # Set all values to nan right now
     resampled_values[:, :] = np.nan
 
