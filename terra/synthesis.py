@@ -103,7 +103,7 @@ def read_mb_bins():
         .to_crs(CONSTANTS.crs_epsg.replace("::", ":"))\
         .set_index("sgi-id")
     outlines.geometry = outlines.geometry.centroid
-    data["sgi-id"] = data["(according to Swiss Glacier Inventory)"].str.replace("/", "-")
+    data["sgi-id"] = data["(according to Swiss Glacier Inventory)"].str.replace("/", "-", regex=False)
     data["geometry"] = outlines.loc[data["sgi-id"].values].geometry.values
     data[["slope", "aspect"]] = outlines.loc[data["sgi-id"].values][["slope_deg", "aspect_deg"]].values
     data["easting"] = data["geometry"].apply(lambda geom: geom.x)

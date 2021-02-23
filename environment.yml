@@ -4,29 +4,27 @@ channels:
 
 dependencies:
         - python=3.9.*
-        - gdal=3.1.*
-        - numpy=1.19.*
-        - opencv=4.5.*
-        - pdal=2.2.*
-        - pip=20.*
-        - scipy=1.5.*
-        - pip:
+        - gdal
+        - numpy
+        - opencv
+        - scipy
+        - geopandas
+        - matplotlib
+        - pandas
+        - python-magic
+        - pygeos
+        - rasterio
+        - scikit-image
+        - PySimpleGUI
+        - cartopy
+        - tqdm
+        - pip
+        - toml
+        - graphviz
+        - scikit-learn
+        - earthpy
+        - jinja2
 
-                - geopandas==0.8.*
-                - matplotlib==3.3.*
-                - pandas==1.1.*
-                - python-magic==0.4.*
-                - pygeos==0.8.*
-                - rasterio==1.1.*
-                - scikit-image==0.17.*
-                - statictypes
-                - PySimpleGUI
-                - cartopy
-                - tqdm==4.51.*
-                - https://s3-eu-west-1.amazonaws.com/download.agisoft.com/Metashape-1.7.1-cp35.cp36.cp37.cp38-abi3-linux_x86_64.whl 
-                - toml
-                - graphviz
-                - sklearn
+        - pip:
+                - https://s3-eu-west-1.amazonaws.com/download.agisoft.com/Metashape-1.7.1-cp35.cp36.cp37.cp38-abi3-linux_x86_64.whl
                 - pytransform3d
-                - earthpy
-                - jinja2

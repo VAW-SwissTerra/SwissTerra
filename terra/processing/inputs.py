@@ -19,18 +19,18 @@ def get_dataset_names() -> list[str]:
     image_metadata["year"] = image_metadata["date"].apply(lambda date: date.year)
     unique_instruments = np.unique(image_metadata["Instrument"])
 
-    datasets: list[str] = []                                                                                            
-    dataset_sorting: list[float] = []                                                                                   
-    for instrument in unique_instruments:                                                                               
-        unique_years = np.unique(image_metadata.loc[image_metadata["Instrument"] == instrument, "year"])                
-        for year in unique_years:                                                                                       
-            dataset_images = image_metadata.loc[                                                                                                                       
-                (image_metadata["Instrument"] == instrument) & (image_metadata["year"] == year)]                                               
-            dataset_sorting.append(dataset_images["easting"].median())                                                                         
-            datasets.append(f"{instrument}_{year}")                                                                                            
-                                                                                                                                               
-    sorted_datasets = [dataset for _, dataset in sorted(zip(dataset_sorting, datasets))]                                                          
-                                                                                                                                                  
+    datasets: list[str] = []
+    dataset_sorting: list[float] = []
+    for instrument in unique_instruments:
+        unique_years = np.unique(image_metadata.loc[image_metadata["Instrument"] == instrument, "year"])
+        for year in unique_years:
+            dataset_images = image_metadata.loc[
+                (image_metadata["Instrument"] == instrument) & (image_metadata["year"] == year)]
+            dataset_sorting.append(dataset_images["easting"].median())
+            datasets.append(f"{instrument}_{year}")
+
+    sorted_datasets = [dataset for _, dataset in sorted(zip(dataset_sorting, datasets))]
+
     return sorted_datasets
 
 
@@ -98,7 +98,6 @@ def export_camera_orientation_csv(dataset: str):
     all_image_meta = georeferencing.generate_corrected_metadata()
     image_metadata = all_image_meta[all_image_meta["Image file"].isin(filenames)].copy()
 
-    # image_metadata["label"] = image_metadata["Image file"].str.replace(".tif", "")
     image_metadata.rename(columns={"Image file": "label"}, inplace=True)
 
     if not os.path.isdir(CACHE_FILES[f"{dataset}_input_dir"]):

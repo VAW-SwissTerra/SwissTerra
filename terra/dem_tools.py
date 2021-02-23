@@ -392,8 +392,8 @@ def make_yearly_ddems(overwrite: bool = False):
     ddem_filepaths = find_dems(CACHE_FILES["ddems_coreg_dir"])
     image_metadata = image_meta.read_metadata()
     image_metadata["station_number"] = image_metadata["Base number"]\
-        .str.replace("_A", "")\
-        .str.replace("_B", "")\
+        .str.replace("_A", "", regex=False)\
+        .str.replace("_B", "", regex=False)\
             .astype(int)
 
     os.makedirs(CACHE_FILES["ddems_yearly_coreg_dir"], exist_ok=True)

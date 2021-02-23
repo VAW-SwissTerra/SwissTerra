@@ -152,7 +152,7 @@ def import_reference(chunk: ms.Chunk, filepath: str) -> None:
 
     # Load the reference position and rotation information.
     reference_data = pd.read_csv(filepath, index_col="label").astype(float)
-    reference_data.index = reference_data.index.str.replace(".tif", "")
+    reference_data.index = reference_data.index.str.replace(".tif", "", regex=False)
 
     for camera in chunk.cameras:
         cam_data = reference_data.loc[camera.label]
@@ -250,7 +250,7 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
         sensors[sensor.label] = sensor
 
     for camera in chunk.cameras:
-        cam_meta = image_meta[image_meta["Image file"].str.replace(".tif", "") == camera.label].iloc[0]
+        cam_meta = image_meta[image_meta["Image file"].str.replace(".tif", "", regex=False) == camera.label].iloc[0]
         sensor_name = f"{cam_meta['Instrument']}_{int(cam_meta['focal_length'])}mm"
         camera.sensor = sensors[sensor_name]
 
@@ -265,7 +265,7 @@ def new_chunk(doc: ms.Document, filenames: list[str], chunk_label: Optional[str]
     groups: dict[str, ms.CameraGroup] = {}
     for camera in chunk.cameras:
         # Find the row corresponding to the camera
-        camera_row = image_meta[image_meta["Image file"].str.replace(".tif", "") == camera.label].squeeze()
+        camera_row = image_meta[image_meta["Image file"].str.replace(".tif", "", regex=False) == camera.label].squeeze()
         # Specify what group label it should have
         group_label = f"station_{str(camera_row['Base number'])}_{camera_row['Position']}"
 

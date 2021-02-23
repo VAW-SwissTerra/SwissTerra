@@ -86,12 +86,12 @@ def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
     """
     Run a PDAL pipeline.
 
-    param: pipeline: The pipeline to run.
-    param: output_metadata_file: Optional. The filepath for the pipeline metadata.
-    param: parameters: Optional. Parameters to fill the pipeline with, e.g. {"FILEPATH": "/path/to/file"}.
+    :param pipeline: The pipeline to run.
+    :param output_metadata_file: Optional. The filepath for the pipeline metadata.
+    :param parameters: Optional. Parameters to fill the pipeline with, e.g. {"FILEPATH": "/path/to/file"}.
     :param show_warnings: Show the full stdout of the PDAL process.
 
-    return: output_meta: The metadata produced by the output.
+    :returns: output_meta: The metadata produced by the output.
     """
     # Create a temporary directory to save the output metadata in
     temp_dir = tempfile.TemporaryDirectory()
