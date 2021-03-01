@@ -112,11 +112,11 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         log(dataset, f"Made {len(successful)} dense clouds")
     metashape_tools.save_document(doc)
 
-    # Generate DEMs for all stereo-pairs that do not yet have one.
-    missing_dem_pairs = metashape_tools.get_unfinished_pairs(chunk, step=metashape_tools.Step.DEM)
-    if len(missing_dem_pairs) > 0:
-        print(f"Building {len(missing_dem_pairs)} DEMs")
-        dem_filepaths = metashape_tools.build_dems(chunk=chunk, pairs=missing_dem_pairs, redo=True)
+    # Generate DEMs for all stereo-pairs.
+    pairs_with_cloud = [cloud.label for cloud in chunk.dense_clouds]
+    if len(pairs_with_cloud) > 0:
+        print(f"Building {len(pairs_with_cloud)} DEMs")
+        dem_filepaths = metashape_tools.build_dems(chunk=chunk, pairs=pairs_with_cloud, redo=True)
         log(dataset, f"Made {len(dem_filepaths)} DEMs")
 
         # Copy the DEMs to the export directory
@@ -142,6 +142,8 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     # Remove all dense clouds in the Metashape project.
     for dense_cloud in chunk.dense_clouds:
         chunk.remove(dense_cloud)
+
+    metashape_tools.save_document(doc)
 
     notify(f"{dataset} finished")
     log(dataset, "Processing finished")
