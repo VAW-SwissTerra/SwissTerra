@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from typing import Any, Optional
 
+import DemUtils as du
 import numpy as np
 import rasterio as rio
 from tqdm import tqdm
@@ -196,7 +197,31 @@ def generate_ddem(filepath: str, save: bool = True, output_dir: str = CACHE_FILE
     return ddem
 
 
-def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
+def unite_bounds(bounds1: dict[str, float], bounds2: dict[str, float], resolution: float, min_bounds=False) -> dict[str, float]:
+    """Unite two bounding boxes to encompass both of them."""
+    # Create new bounding coordinates that encompass both datasets
+    lower_func = min if not min_bounds else max
+    upper_func = max if not min_bounds else min
+
+    new_bounds = {
+        "west": lower_func(bounds1["west"], bounds2["west"]),
+        "east": upper_func(bounds1["east"], bounds2["east"]),
+        "south": lower_func(bounds1["south"], bounds2["south"]),
+        "north": upper_func(bounds1["north"], bounds2["south"])
+    }
+
+    for key in ["west", "south"]:
+        new_bounds[key] -= new_bounds[key] % resolution
+    for key in ["north", "east"]:
+        modulo = new_bounds[key] % resolution
+        if modulo != 0:
+            new_bounds[key] -= modulo - resolution
+
+    return new_bounds
+
+
+def coregister_dem(filepath: str, reference_path: Optional[str] = None, output_path: Optional[str] = None,
+                   exclude_stable_ground: bool = True) -> Optional[dict[str, Any]]:
     """
     Coregister a DEM to the reference using ICP coregistration.
 
@@ -204,31 +229,45 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
     :returns: A modified version of the PDAL ICP metadata. Returns None if the process failed.
     """
     dem = rio.open(filepath)
-    dem_elevation = dem.read(1)
-    dem_elevation[dem_elevation < -999] = np.nan
-
-    # Check that valid values exist in the DEM
-    if np.all(~np.isfinite(dem_elevation)):
-        return None
 
     bounds = dict(zip(["west", "south", "east", "north"], list(dem.bounds)))
 
+    # If reference_path is None, load the base_dem as the reference elevation
+    if reference_path is not None:
+        cropped_reference_dem = load_reference_elevation(bounds)
+        dem_elevation = dem.read(1)
+    # If the reference_path exists, load it instead and modify the variables accordingly.
+    else:
+        ref_dem = rio.open(reference_path)
+        ref_bounds = dict(zip(["west", "south", "east", "north"], list(ref_dem.bounds)))
+        bounds = unite_bounds(bounds, ref_bounds, resolution=dem.res[0], min_bounds=True)
+
+        dem_elevation = reproject_dem(dem, bounds, resolution=dem.res[0], resampling=rio.warp.Resampling.nearest)
+        cropped_reference_dem = reproject_dem(
+            ref_dem, bounds, resolution=dem.res[0], resampling=rio.warp.Resampling.nearest)
+
+    # Replace the nan value with np.nans
+    dem_elevation[dem_elevation < -999] = np.nan
+    cropped_reference_dem[cropped_reference_dem < -999] = np.nan
+
     # Load and crop/resample the stable ground mask and reference DEM
     stable_ground_mask = outlines.read_stable_ground_mask(bounds)
-    cropped_reference_dem = load_reference_elevation(bounds)
 
+    if not exclude_stable_ground:
+        stable_ground_mask[:] = True
     # Set all non-stable values to nan
     dem_elevation[~stable_ground_mask] = np.nan
     cropped_reference_dem[~stable_ground_mask] = np.nan
 
+    # Check that valid values exist in the DEM
+    if np.all(~np.isfinite(dem_elevation)) or np.all(~np.isfinite(cropped_reference_dem)):
+        return None
+
     # Calculate the bias between the two products before coregistration
     # ICP works better if this bias is first accounted for.
-    bias = np.nanmedian(cropped_reference_dem) - np.nanmedian(stable_ground_mask)
+    bias = np.nanmedian(cropped_reference_dem - dem_elevation)
 
     dem_elevation -= bias
-
-    if np.all(np.isnan(cropped_reference_dem)):
-        return None
 
     # Create a temporary directory and temporary filenames for the analysis.
     temp_dir = tempfile.TemporaryDirectory()
@@ -260,21 +299,34 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
         assert os.path.isfile(path)
 
     # Run the DEM coalignment
-    processing_tools.coalign_dems(
-        reference_path=temp_ref_path,
-        aligned_path=temp_dem_path,
-        pixel_buffer=5,
-        temp_dir=temp_dir.name
+    # processing_tools.coalign_dems(
+    #    reference_path=temp_ref_path,
+    #    aligned_path=temp_dem_path,
+    #    pixel_buffer=5,
+    #    temp_dir=temp_dir.name
+    # )
+    stats: dict[str, Any] = {}
+    output_dem, _ = du.coreg.coregister(
+        reference_raster=temp_ref_path,
+        to_be_aligned_raster=temp_dem_path,
+        method="icp",
+        max_assumed_offset=50,
+        metadata=stats,
+        verbose=False
     )
 
+    if output_path is not None:
+        output_dem.save(output_path)
+
     # Load the resulting statistics
-    try:
-        with open(result_path) as infile:
-            stats = json.load(infile)["stages"]["filters.icp"]
-    except FileNotFoundError:
-        return None
+    # try:
+    #    with open(result_path) as infile:
+    #        stats = json.load(infile)["stages"]["filters.icp"]
+    # except FileNotFoundError:
+    #    return None
 
     # Use the resultant transformation to transform the original DEM
+    '''
     processing_tools.run_pdal_pipeline(
         pipeline="""
         [
@@ -320,12 +372,15 @@ def coregister_dem(filepath: str) -> Optional[dict[str, Any]]:
     )
     # Fix the CRS information of the aligned DEM
     subprocess.run(["gdal_edit.py", "-a_srs", f"EPSG:{dem.crs.to_epsg()}", aligned_dem_path], check=True)
+    '''
 
     # Count the overlapping pixels.
     stats["overlap"] = np.count_nonzero(np.isfinite(cropped_reference_dem) & np.isfinite(dem_elevation))
     stats["bias"] = bias
-    with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json"), "w") as outfile:
-        json.dump(stats, outfile)
+    for stat in ["centroid", "composed", "transform"]:
+        stats["icp"][stat] = stats["icp"][stat].replace("\n", " ")
+    # with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json"), "w") as outfile:
+    #    json.dump(stats, outfile)
 
     return stats
 

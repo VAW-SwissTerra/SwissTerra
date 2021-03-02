@@ -8,7 +8,7 @@ import pickle
 import tempfile
 import warnings
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 import Metashape as ms
 import numpy as np
@@ -479,25 +479,25 @@ def get_marker_reprojection_error(camera: ms.Camera, marker: ms.Marker) -> np.fl
     """
     # Validate that both the marker and the camera is not None
     if None in [camera, marker]:
-        return np.NaN
+        return np.nan
     if marker.position is None:
-        return np.NaN
+        return np.nan
     projected_position = marker.projections[camera].coord
     try:
         reprojected_position = camera.project(marker.position)
     except TypeError:
         print(marker.position)
-        return np.NaN
+        return np.nan
 
     if reprojected_position is None:
-        return np.NaN
+        return np.nan
 
     diff = (projected_position - reprojected_position).norm()
 
     image_size = max(int(camera.photo.meta["File/ImageWidth"]), int(camera.photo.meta["File/ImageHeight"]))
     # Check if the reprojected position difference is too high
     if diff > image_size:
-        return np.NaN
+        return np.nan
 
     return diff
 
@@ -523,6 +523,43 @@ def get_rms_marker_reprojection_errors(markers: list[ms.Marker]) -> dict[ms.Mark
     mean_errors = {marker: rms(error_list) for marker, error_list in errors.items()}
 
     return mean_errors
+
+
+def get_camera_pitch_error(chunk, camera) -> float:
+    """Get the difference between the estimated and reference camera pitch."""
+    if camera.transform is None:
+        return np.nan
+
+    # The lower monstrosity is adapted from: https://www.agisoft.com/forum/index.php?topic=6340.0
+    T = chunk.transform.matrix
+    m = chunk.crs.localframe(T.mulp(camera.center))  # transformation matrix to the LSE coordinates in the given point
+    R = m * T * camera.transform * ms.Matrix().Diag([1, -1, -1, 1])
+
+    row = list()
+    for j in range(0, 3):  # creating normalized rotation matrix 3x3
+        row.append(R.row(j))
+        row[j].size = 3
+        row[j].normalize()
+    R = ms.Matrix([row[0], row[1], row[2]])
+
+    estimated_pitch = ms.utils.mat2ypr(R)[1]
+
+    pitch_diff = estimated_pitch - ms.utils.mat2ypr(ms.utils.opk2mat(camera.reference.rotation))[1]
+
+    return pitch_diff
+
+
+def remove_bad_cameras(chunk, pitch_error_threshold: float = 40):
+    """Reset the alignment on cameras whose estimated pitch is excessively off compared to the reference."""
+    n_removed_cameras = 0
+    for camera in chunk.cameras:
+        if camera.transform is None:
+            continue
+        if np.abs(get_camera_pitch_error(chunk, camera)) > pitch_error_threshold:
+            camera.transform = None
+            n_removed_cameras += 1
+
+    print(f"Removed {n_removed_cameras} cameras with pitch offset above {pitch_error_threshold} degrees")
 
 
 def get_chunk_stereo_pairs(chunk: ms.Chunk) -> list[str]:
@@ -924,7 +961,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
     path_combinations = [(dem_paths[first], dem_paths[second]) for first, second in pair_combinations]
 
     # Start a progress bar for the DEM coaligning
-    progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
+    #progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
 
     def coalign_dems(path_combination: tuple[str, str]):
         """Coalign two DEMs in one thread."""
@@ -936,10 +973,10 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
 
     # Coaling all DEM combinations
     # The results variable is a list of transforms from pair1 to pair2
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        results = list(executor.map(coalign_dems, path_combinations))
-
-    progress_bar.close()
+    results: list[Optional[dict[str, Any]]] = []
+    for path1, path2 in tqdm(path_combinations, desc="Coaligning DEM pairs"):
+        result = dem_tools.coregister_dem(path1, path2, exclude_stable_ground=False)
+        results.append(result)
 
     # Run through each combination of stereo-pairs and try to coalign the DEMs
     progress_bar = tqdm(total=len(pair_combinations))
@@ -954,13 +991,13 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
             continue
 
         # Skip if the coalignment fitness was poor. I think 10 means 10 m of offset
-        if result["fitness"] > max_fitness:
+        if result["icp"]["fitness"] > max_fitness:
             progress_bar.update()
-            print(f"{pair_1} to {pair_2} fitness exceeded threshold: {result['fitness']}")
+            print(f"{pair_1} to {pair_2} fitness exceeded threshold: {result['icp']['fitness']}")
             continue
 
         # Get the ICP centroid as a numpy array (x, y, z) and create tie points from it
-        centroid = np.array([float(value) for value in result["centroid"].splitlines()])
+        centroid = np.array([float(value) for value in result["icp"]["centroid"].split(" ", 3)])
         # Offsets to change the centroid (first offsets the x coordinate, third offsets the y coordinate, etc.)
         offsets = [
             [1, 0, 0],
@@ -978,7 +1015,10 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
         # The transform is a "recipe" for how to get points from an aligned POV to a reference POV
         # Therefore, by transforming the aligned points to a reference POV, we get the corresponding reference points.
         reference_point_positions = processing_tools.transform_points(
-            aligned_point_positions, result["composed"], inverse=False)
+            aligned_point_positions, result["icp"]["composed"], inverse=False)
+
+        # Account for the bias that was corrected in the aligned point cloud during ICP
+        aligned_point_positions["Z"] += result["bias"]
 
         def global_to_local(row: pd.Series) -> ms.Vector:
             """Convert global coordinates in a pandas row to local coordinates."""
@@ -1083,7 +1123,7 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
 
             # Add a marker and set an appropriate label
             marker = chunk.addMarker()
-            error = round(float(result["fitness"]), 2)  # The "fitness" is presumed to be in m
+            error = round(float(result["icp"]["fitness"]), 2)  # The "fitness" is presumed to be in m
             marker.label = f"tie_{pair_1}_to_{pair_2}_num_{j}_error_{error}_m"
 
             # Set the projections
@@ -1129,15 +1169,17 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
 
     def register_dem(pair: str):
         """Register a DEM in one thread."""
-        result = processing_tools.coalign_dems(
-            reference_path=base_dem_paths[pair], aligned_path=dem_paths[pair], pixel_buffer=10)
+        # result = processing_tools.coalign_dems(
+        # reference_path=base_dem_paths[pair], aligned_path=dem_paths[pair])
+        result = dem_tools.coregister_dem(dem_paths[pair], reference_path=base_dem_paths[pair],
+                                          exclude_stable_ground=True)
         progress_bar.update()
 
         return result
 
     # Coaling all DEM combinations
     # The results variable is a list of all resultant transforms.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=9) as executor:
         results = list(executor.map(register_dem, pairs_with_dem))
 
     progress_bar.close()
@@ -1156,13 +1198,13 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
             continue
 
         # Skip if the coalignment fitness was poor. I think e.g. 10 means 10 m of offset
-        if result["fitness"] > max_fitness:
+        if result["icp"]["fitness"] > max_fitness:
             progress_bar.update()
-            print(f"{pair} fitness exceeded threshold: {result['fitness']}")
+            print(f"{pair} fitness exceeded threshold: {result['icp']['fitness']}")
             continue
 
         # Get the ICP centroid as a numpy array (x, y, z) and create tie points from it
-        centroid = np.array([float(value) for value in result["centroid"].splitlines()])
+        centroid = np.array([float(value) for value in result["icp"]["centroid"].split(" ", 3)])
         # Offsets to change the centroid (first offsets the x coordinate, third offsets the y coordinate, etc.)
         offsets = [
             [1, 0, 0],
@@ -1180,7 +1222,10 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
         # Transform the source points to the reference coordinates using the ICP transform
         # These will be the GCP location data.
         destination_point_positions = processing_tools.transform_points(
-            source_point_positions, result["composed"], inverse=False)
+            source_point_positions, result["icp"]["composed"], inverse=False)
+
+        # Account for the bias that was corrected in the aligned point cloud during ICP
+        source_point_positions["Z"] += result["bias"]
 
         def global_to_local(row: pd.Series) -> pd.Series:
             """Convert global coordinates in a pandas row to local coordinates."""
@@ -1254,13 +1299,17 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
 
         # Find all the cameras that can "see" the local source coordinates.
         cameras = find_good_cameras(pair, local_source_positions)
-
-        assert len(cameras) > 0
+        if len(cameras) < 2:
+            progress_bar.update()
+            print(f"Less than two cameras could see the ICP centroid ({pair}), bias: {result['bias']},"
+                  f" centroid: {result['icp']['centroid']}")
+            continue
 
         # Set the marker pixel accuracy
         chunk.marker_projection_accuracy = marker_pixel_accuracy
         chunk.marker_location_accuracy = [CONSTANTS.stable_ground_accuracy] * 3
 
+        n_added_markers = 0
         # Go over each point position and make a Metashape marker from it if it's valid
         for j in range(local_source_positions.shape[0]):
             # Extract the local source position and the "global" destination position.
@@ -1279,13 +1328,14 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
             if np.count_nonzero(list(projection_validity.values())) < 2:
                 continue
 
-            error = round(float(result["fitness"]), 2)  # The "fitness" is presumed to be in m
+            error = round(float(result["icp"]["fitness"]), 2)  # The "fitness" is presumed to be in m
             marker_label = f"gcp_base_to_{pair}_num_{j}_fitness_{error}"
             for marker in chunk.markers:
                 if marker_label[:marker_label.index("fitness")] in marker.label:
                     chunk.remove(marker)
             # Add a marker and set an appropriate label
             marker = chunk.addMarker()
+            n_added_markers += 1
             marker.label = marker_label
 
             marker.reference.location = destination_position
@@ -1295,6 +1345,9 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
                 if not projection_validity[camera]:
                     continue
                 marker.projections[camera] = ms.Marker.Projection(projection, True)
+
+        if n_added_markers == 0:
+            warnings.warn(f"No markers added for {pair}")
 
         progress_bar.update()
 

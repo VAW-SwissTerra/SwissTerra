@@ -144,6 +144,7 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
     return: result: The resultant PDAL output. Returns None if there was no alignment.
 
     """
+    raise DeprecationWarning("Deprecated in favour of DemUtils")
     # Create a bounds object to more explicitly handle bounds.
     Bounds = namedtuple("Bounds", ["x_min", "x_max", "y_min", "y_max"])
 

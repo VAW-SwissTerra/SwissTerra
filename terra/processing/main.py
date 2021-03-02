@@ -22,6 +22,8 @@ def log(dataset: str, event: str):
         writer = csv.writer(outfile)
         writer.writerow([current_time, dataset, event])
 
+    print(f"\n{current_time} ({dataset}): {event}\n")
+
 
 def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     """
@@ -76,9 +78,12 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         # Coalign stereo-pair DEMs with each other and generate markers from their alignment
         metashape_tools.stable_ground_registration(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
+
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
-        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=6)
-        metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
+        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=5)
+        # Remove cameras with unreasonable estimated pitch values.
+        metashape_tools.remove_bad_cameras(chunk, pitch_error_threshold=40)
+        metashape_tools.optimize_cameras(chunk, fixed_sensors=False)
 
         metashape_tools.save_document(doc)
 
@@ -132,7 +137,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         print(f"Made {len(successful)} orthomosaics")
     metashape_tools.save_document(doc)
     metashape_tools.export_orthomosaics(chunk=chunk, pairs=pairs,
-                                        directory=os.path.join(inputs.TEMP_DIRECTORY, "output/orthos"), overwrite=False)
+                                        directory=os.path.join(inputs.TEMP_DIRECTORY, "output/orthos"), overwrite=True)
 
     # Remove all ply files (dense clouds that take up a lot of space)
     for filename in os.listdir(inputs.CACHE_FILES[f"{dataset}_temp_dir"]):
@@ -146,6 +151,7 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     metashape_tools.save_document(doc)
 
     notify(f"{dataset} finished")
+    print(f"\n\n{dataset} finished\n\n")
     log(dataset, "Processing finished")
 
 
