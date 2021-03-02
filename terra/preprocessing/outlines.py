@@ -312,6 +312,15 @@ def fix_lk50_outlines():
     print(lk50)
 
 
+def sgi_1973_id_to_2016(sgi_1973_id: str) -> str:
+    try:
+        first, second = sgi_1973_id.split("-")
+        sgi_2016_id = first + "-" + second.zfill(2)
+    except ValueError:
+        sgi_2016_id = sgi_1973_id
+    return sgi_2016_id
+
+
 def generate_lk50_centrelines():
     """
     ADD THIS
@@ -328,17 +337,8 @@ def generate_lk50_centrelines():
 
     for sgi_id in tqdm(lk50["SGI"].unique(), desc="Extending centrelines"):
 
-        # temp_dir = tempfile.TemporaryDirectory()
-        # ref_dem_path = os.path.join(temp_dir.name, "ref_dem.tif")
-        # if sgi_id != "A54l-19":
-        #    continue
-
         # The SGI2016 SGI ids are sometimes zfilled: B43-03 instead of B43-3
-        try:
-            first, second = sgi_id.split("-")
-            sgi_2016_id = first + "-" + second.zfill(2)
-        except ValueError:
-            sgi_2016_id = sgi_id
+        sgi_2016_id = sgi_1973_id_to_2016(sgi_id)
 
         glacier_1927 = lk50.loc[lk50["SGI"] == sgi_id].iloc[0]
         glacier_centrelines_2016 = centrelines_2016.loc[centrelines_2016["sgi-id"] == sgi_2016_id].copy()
@@ -432,135 +432,6 @@ def generate_lk50_centrelines():
     centrelines_lk50.to_file(CACHE_FILES["lk50_centrelines"])
 
 
-def extrapolate_point(point_1: tuple[float, float], point_2: tuple[float, float]) -> tuple[float, float]:
-    """Creates a point extrapoled in p1->p2 direction"""
-    # p1 = [p1.x, p1.y]
-    # p2 = [p2.x, p2.y]
-    extrap_ratio = 10
-    return (point_1[0]+extrap_ratio*(point_2[0]-point_1[0]), point_1[1]+extrap_ratio*(point_2[1]-point_1[1]))
-
-
-def buffer_centreline():
-    centrelines = gpd.read_file(CACHE_FILES["lk50_centrelines"])
-    old_outlines = gpd.read_file(CACHE_FILES["lk50_outlines"])
-
-    for sgi_id in centrelines["SGI"].values:
-
-        if sgi_id != "B43-3":
-            continue
-
-        centreline = centrelines.loc[centrelines["SGI"] == sgi_id].iloc[-1]
-        distance_threshold = centreline.geometry.length * 0.1
-        old_outline = old_outlines.loc[old_outlines["Parent1850"] == sgi_id].iloc[-1]
-        # ext_centreline_parts = [
-        #    getExtrapoledLine(centreline.geometry.interpolate(0), centreline.geometry.interpolate(1)),
-        #    centreline.geometry,
-        #    getExtrapoledLine(centreline.geometry.interpolate(c_length - 1), centreline.geometry.interpolate(c_length))
-        # ]
-        # extended_centreline = shapely.ops.linemerge(ext_centreline_parts)
-        coords = list(centreline.geometry.coords)
-        coords.insert(0, extrapolate_point(coords[1], coords[0]))
-        coords.insert(-1, extrapolate_point(coords[-2], coords[-1]))
-
-        extended_centreline = shapely.geometry.LineString(coords)
-        buffered_centrelines = []
-
-        plt.subplot(131)
-
-        for buffer in np.linspace(5, 50, num=20):
-            buffered = extended_centreline.buffer(buffer).boundary
-
-            lines = shapely.ops.split(buffered, extended_centreline)
-            intersection = lines.intersection(old_outline.geometry)
-
-            lines_inside = []
-            for line in intersection:
-                merged = False
-                for i, line2 in enumerate(lines_inside):
-                    if line2.touches(line):
-                        lines_inside[i] = shapely.ops.linemerge([line, line2])
-                        merged = True
-                if not merged:
-                    lines_inside.append(line)
-
-            for line in lines_inside:
-                first_and_last_points = np.array([
-                    [line.xy[0][0], line.xy[1][0]],
-                    [line.xy[0][-1], line.xy[1][-1]]
-                ])
-                distances = np.linalg.norm(
-                    first_and_last_points - np.array([centreline.geometry.xy[0][0], centreline.geometry.xy[1][0]]),
-                    axis=1)
-                if np.count_nonzero(distances < distance_threshold) == 0:
-                    continue
-
-                if (line.length / centreline.geometry.length) < 0.6:
-                    continue
-                buffered_centrelines.append(line)
-
-                plt.plot(*line.xy)
-
-        plt.plot(*centreline.geometry.xy, color="black", linestyle="--")
-        outline_iter = [
-            old_outline.geometry.boundary] if old_outline.geometry.geom_type == "LineString" else old_outline.geometry.boundary
-        for line in outline_iter:
-            plt.plot(*line.xy, color="blue")
-        # plt.plot(*polygon.exterior.xy)
-        plt.axis("equal")
-
-        plt.subplot(132)
-        new_outlines = gpd.read_file(files.INPUT_FILES["sgi_2016"])
-
-        # The SGI2016 SGI ids are sometimes zfilled: B43-03 instead of B43-3
-        try:
-            first, second = sgi_id.split("-")
-            sgi_2016_id = first + "-" + second.zfill(2)
-        except ValueError:
-            sgi_2016_id = sgi_id
-        new_outline = new_outlines.loc[new_outlines["sgi-id"] == sgi_2016_id].to_crs(old_outlines.crs).iloc[0]
-
-        cropped_centrelines = []
-        intersection = shapely.ops.linemerge(buffered_centrelines).intersection(new_outline.geometry)
-        for line in intersection:
-            first_and_last_points = np.array([
-                [line.xy[0][0], line.xy[1][0]],
-                [line.xy[0][-1], line.xy[1][-1]]
-            ])
-            distances = np.linalg.norm(
-                first_and_last_points - np.array([centreline.geometry.xy[0][0], centreline.geometry.xy[1][0]]),
-                axis=1)
-            if np.count_nonzero(distances < distance_threshold) == 0:
-                continue
-
-            if (line.length / centreline.geometry.length) < 0.6:
-                continue
-            plt.plot(*line.xy)
-            cropped_centrelines.append(line)
-
-        outline_iter = [
-            new_outline.geometry.boundary] if new_outline.geometry.geom_type == "LineString" else new_outline.geometry.boundary
-        for line in outline_iter:
-            assert line.geom_type == "LineString", line.geom_type
-            plt.plot(*line.xy, color="blue")
-        plt.plot(*centreline.geometry.xy, color="black", linestyle="--")
-
-        plt.subplot(133)
-        old_lengths = np.array([line.length for line in buffered_centrelines])
-        new_lengths = np.array([line.length for line in cropped_centrelines])
-        xs = [int(old_outline.date.split("-")[0]), 2016]
-        plt.plot(xs, [old_lengths.mean(), new_lengths.mean()])
-        plt.boxplot([old_lengths, new_lengths], positions=xs, widths=10)
-        # plt.gca().set_xticklabels([plt.Text(0, text=), plt.Text(1, text="2016")])
-        lengths = [line.length for line in buffered_centrelines]
-
-        #plt.ylim(0, centreline.geometry.length * 1.05)
-        plt.ylim(plt.gca().get_ylim()[0] * 0.9, plt.gca().get_ylim()[1])
-        plt.xlim(xs[0] - 10, xs[1] + 10)
-        print(np.mean(lengths), len(lengths), np.std(lengths))
-        plt.show()
-
-
 if __name__ == "__main__":
 
-    # generate_lk50_centrelines()
-    buffer_centreline()
+    generate_lk50_centrelines()

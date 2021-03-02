@@ -7,14 +7,20 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio as rio
+import shapely
 import sklearn.linear_model
 import sklearn.model_selection
 import sklearn.neural_network
 import sklearn.pipeline
 import sklearn.preprocessing
+from tqdm import tqdm
 
-from terra import files
+import glacier_lengths
+import glacier_lengths.plotting
+from terra import base_dem, files
 from terra.constants import CONSTANTS
+from terra.preprocessing import outlines
 
 
 def read_mass_balance():
@@ -31,7 +37,7 @@ def model_mass_balance():
     # plt.show()
     mb_data = mb_data[sorted(mb_data.columns, key=len, reverse=True)]
 
-    #mb_data.columns = sorted([col[0] + col[1:].zfill(2) if len(col) > 1 else col for col in mb_data], reverse=True)
+    # mb_data.columns = sorted([col[0] + col[1:].zfill(2) if len(col) > 1 else col for col in mb_data], reverse=True)
 
     outlines = gpd.read_file(files.INPUT_FILES["sgi_2016"]).to_crs(CONSTANTS.crs_epsg.replace("::", ":"))
     outlines.geometry = outlines.geometry.centroid
@@ -144,3 +150,74 @@ def read_mb_bins():
     model.fit(x_train.astype("float32"), y_train.astype("float32"))
 
     print(model.score(x_test, y_test))
+
+
+def measure_glacier_lengths():
+    centrelines = gpd.read_file(outlines.CACHE_FILES["lk50_centrelines"])
+    outlines_lk50 = gpd.read_file(outlines.CACHE_FILES["lk50_outlines"])
+    outlines_1973 = gpd.read_file(files.INPUT_FILES["sgi_1973"]).to_crs(outlines_lk50.crs)
+    outlines_2016 = gpd.read_file(files.INPUT_FILES["sgi_2016"]).to_crs(outlines_lk50.crs)
+
+    lengths = pd.DataFrame(columns=["SGI1973", "SGI2016", "LK50_date", "LK50_length", "LK50_length_std",
+                                    "SGI1973_length", "SGI1973_std", "SGI2016_length", "SGI2016_std"])
+
+    dem = rio.open(base_dem.CACHE_FILES["base_dem"])
+    for sgi_id in tqdm(centrelines["SGI"].values, desc="Measuring lengths"):
+
+        centreline = centrelines.loc[centrelines["SGI"] == sgi_id].iloc[-1].geometry
+
+        elevs = list(dem.sample((centreline.coords[0], centreline.coords[-1])))
+
+        if elevs[0][0] > elevs[1][0]:
+            centreline = shapely.geometry.LineString(list(centreline.coords)[::-1])
+
+        outline_lk50_row = outlines_lk50.loc[outlines_lk50["SGI"] == sgi_id].iloc[-1]
+        outline_lk50 = outline_lk50_row.geometry
+
+        sgi_ids_1973 = outline_lk50_row["SGI1973"].split(",")
+        sgi_ids_2016 = list(map(outlines.sgi_1973_id_to_2016, sgi_ids_1973))
+
+        outline_1973 = outlines_1973.loc[outlines_1973["SGI"].isin(sgi_ids_1973)].geometry.unary_union
+        outline_2016 = outlines_2016.loc[outlines_2016["sgi-id"].isin(sgi_ids_2016)].geometry.unary_union
+
+        try:
+            centrelines_lk50 = glacier_lengths.buffer_centerline(
+                centerline=centreline,
+                glacier_outline=outline_lk50,
+                min_radius=1,
+                max_radius=50,
+                buffer_count=20
+            )
+        except AssertionError as exception:
+            warnings.warn(f"Line buffering for SGI {sgi_id} failed:\n{exception}")
+            continue
+
+        try:
+            centrelines_1973 = glacier_lengths.cut_centerlines(centrelines_lk50, outline_1973)
+            centrelines_2016 = glacier_lengths.cut_centerlines(centrelines_lk50, outline_2016)
+        except AssertionError as exception:
+            if "empty geometry" in str(exception):
+                continue
+
+        lengths_lk50 = glacier_lengths.measure_lengths(centrelines_lk50)
+        lengths_1973 = glacier_lengths.measure_lengths(centrelines_1973)
+        lengths_2016 = glacier_lengths.measure_lengths(centrelines_2016)
+
+        std_variance = abs(lengths_lk50.std() - lengths_1973.std()) / lengths_lk50.std()
+        if std_variance > 10:
+            warnings.warn(f"{sgi_id} std variance above threshold: {std_variance:.2f}. Skipping")
+            continue
+
+        lengths.loc[sgi_id] = (",".join(sgi_ids_1973), ",".join(sgi_ids_2016), outline_lk50_row["date"],
+                               lengths_lk50.mean(), lengths_lk50.std(), lengths_1973.mean(), lengths_1973.std(),
+                               lengths_2016.mean(), lengths_2016.std())
+
+    print(centrelines.shape[0] - lengths.shape[0], "failed")
+    lengths["length_frac"] = lengths["SGI2016_length"] / lengths["LK50_length"]
+
+    weighted_average = np.average(lengths["length_frac"], weights=lengths["LK50_length"])
+    print(weighted_average)
+
+    plt.hist(lengths["length_frac"], bins=50)
+    print(lengths)
+    plt.show()
