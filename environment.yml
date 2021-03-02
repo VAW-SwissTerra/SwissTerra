@@ -24,7 +24,11 @@ dependencies:
         - scikit-learn
         - earthpy
         - jinja2
+        - pdal
 
         - pip:
                 - https://s3-eu-west-1.amazonaws.com/download.agisoft.com/Metashape-1.7.1-cp35.cp36.cp37.cp38-abi3-linux_x86_64.whl
                 - pytransform3d
+                - git+https://github.com/erikmannerfelt/glacier_lengths.git
+                - git+https://github.com/GlacioHack/GeoUtils.git
+                - git+https://github.com/GlacioHack/DemUtils.git

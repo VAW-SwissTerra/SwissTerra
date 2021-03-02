@@ -6,3 +6,4 @@ pydocstyle
 sphinx
 recommonmark
 autopep8
+ipython
