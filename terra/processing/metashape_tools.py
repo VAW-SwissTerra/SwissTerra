@@ -5,6 +5,7 @@ import concurrent.futures
 import itertools
 import os
 import pickle
+import shutil
 import tempfile
 import warnings
 from enum import Enum
@@ -961,22 +962,18 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
     path_combinations = [(dem_paths[first], dem_paths[second]) for first, second in pair_combinations]
 
     # Start a progress bar for the DEM coaligning
-    #progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
-
-    def coalign_dems(path_combination: tuple[str, str]):
-        """Coalign two DEMs in one thread."""
-        path_1, path_2 = path_combination
-        result = processing_tools.coalign_dems(reference_path=path_1, aligned_path=path_2)
-        progress_bar.update()
-
-        return result
+    # progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
 
     # Coaling all DEM combinations
     # The results variable is a list of transforms from pair1 to pair2
-    results: list[Optional[dict[str, Any]]] = []
-    for path1, path2 in tqdm(path_combinations, desc="Coaligning DEM pairs"):
-        result = dem_tools.coregister_dem(path1, path2, exclude_stable_ground=False)
-        results.append(result)
+    #results: list[Optional[dict[str, Any]]] = []
+    progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        results = list(executor.map(lambda paths: processing_tools.coalign_dems(paths, progress_bar=progress_bar),
+                                    path_combinations))
+
+    progress_bar.close()
+    print(results)
 
     # Run through each combination of stereo-pairs and try to coalign the DEMs
     progress_bar = tqdm(total=len(pair_combinations))
@@ -1179,7 +1176,7 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
 
     # Coaling all DEM combinations
     # The results variable is a list of all resultant transforms.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=9) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         results = list(executor.map(register_dem, pairs_with_dem))
 
     progress_bar.close()

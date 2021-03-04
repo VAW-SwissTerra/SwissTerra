@@ -1,6 +1,7 @@
 """Functions to process data."""
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import warnings
@@ -8,10 +9,12 @@ from collections import namedtuple
 from typing import Any, Dict, Optional, Tuple, Union
 
 import cv2
+import geoutils as gu
 import numpy as np
 import pandas as pd
 import rasterio as rio
 import scipy.ndimage
+from tqdm import tqdm
 
 from terra import files
 from terra.constants import CONSTANTS
@@ -130,8 +133,8 @@ def run_pdal_pipeline(pipeline: str, output_metadata_file: Optional[str] = None,
     return output_meta
 
 
-def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_value=-9999,
-                 temp_dir: Optional[str] = None) -> Optional[Dict[str, str]]:
+def coalign_dems_old(reference_path: str, aligned_path: str, pixel_buffer=3, nan_value=-9999,
+                     temp_dir: Optional[str] = None) -> Optional[Dict[str, str]]:
     """
     Align two DEMs and return the ICP result.
 
@@ -364,6 +367,88 @@ def coalign_dems(reference_path: str, aligned_path: str, pixel_buffer=3, nan_val
     result["composed"] = result["composed"].replace("\n", " ")
 
     return result
+
+
+def coalign_dems(path_combination: tuple[str, str], progress_bar: Optional[tqdm] = None):
+    """Coalign two DEMs in one thread."""
+    path_1, path_2 = path_combination
+    temp_dir = tempfile.TemporaryDirectory()
+    temp_path_1 = os.path.join(temp_dir.name, os.path.basename(path_1))
+    temp_path_2 = os.path.join(temp_dir.name, os.path.basename(path_2))
+
+    shutil.copy(path_1, temp_path_1)
+    shutil.copy(path_2, temp_path_2)
+
+    dem1 = gu.georaster.Raster(temp_path_1)
+    dem2 = gu.georaster.Raster(temp_path_2).reproject(dem1)
+
+    elev1 = np.ma.masked_array(dem1.data, mask=dem1.data < -1000).squeeze()
+    elev2 = np.ma.masked_array(dem2.data, mask=dem2.data < -1000).squeeze()
+
+    overlap_mask = ~elev1.mask & ~elev2.mask
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', r'All-NaN (slice|axis) encountered')
+        bias = np.nanmedian(np.where(~elev1.mask, elev1, np.nan) - np.where(~elev2.mask, elev2, np.nan))
+
+    if np.all(np.isnan(overlap_mask)) or np.isnan(bias):
+        if progress_bar is not None:
+            progress_bar.update()
+        return None
+    elev2 -= bias
+
+    # Buffer the mask to increase the likelyhood of including the correct values
+    overlap_buffered = scipy.ndimage.maximum_filter(overlap_mask, size=10, mode="constant")
+
+    x_coords, y_coords = np.meshgrid(
+        np.linspace(dem1.bounds.left + dem1.res[0] / 2, dem1.bounds.right - dem1.res[0] / 2, num=dem1.width),
+        np.linspace(dem1.bounds.bottom + dem1.res[0] / 2, dem1.bounds.top - dem1.res[0] / 2, num=dem1.height)[::-1]
+    )
+
+    points_1_path = os.path.join(temp_dir.name, os.path.splitext(os.path.basename(path_1))[0] + ".xyz")
+    points_2_path = os.path.join(temp_dir.name, os.path.splitext(os.path.basename(path_2))[0] + ".xyz")
+
+    for elev, path in zip([elev1, elev2], [points_1_path, points_2_path]):
+        point_cloud = np.dstack([
+            x_coords[overlap_buffered & ~elev.mask],
+            y_coords[overlap_buffered & ~elev.mask],
+            elev[overlap_buffered & ~elev.mask]]).squeeze()
+
+        np.savetxt(path, point_cloud, delimiter=",")
+
+    result = run_pdal_pipeline(
+        """
+            [
+                {
+                    "type": "readers.text",
+                    "header": "X, Y, Z",
+                    "filename": "POINTS1"
+                },
+                {
+                    "type": "readers.text",
+                    "header": "X, Y, Z",
+                    "filename": "POINTS2"
+                },
+                {
+                    "type": "filters.icp"
+                }
+            ]""",
+        parameters={
+            "POINTS1": points_1_path,
+            "POINTS2": points_2_path
+        }
+    )["stages"]["filters.icp"]
+
+    for key in result:
+        if not isinstance(result[key], str):
+            continue
+        result[key] = result[key].replace("\n", " ")
+
+    output = {"icp": result, "bias": bias, "overlap": np.count_nonzero(overlap_mask)}
+    temp_dir.cleanup()
+    if progress_bar is not None:
+        progress_bar.update()
+    return output
 
 
 def transform_points(points: pd.DataFrame, composed_transform: str, inverse: bool = False) -> pd.DataFrame:

@@ -78,9 +78,9 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
         # Coalign stereo-pair DEMs with each other and generate markers from their alignment
         metashape_tools.stable_ground_registration(chunk, pairs=pairs, marker_pixel_accuracy=2)
         metashape_tools.coalign_stereo_pairs(chunk, pairs=pairs, marker_pixel_accuracy=2)
-
         metashape_tools.optimize_cameras(chunk, fixed_sensors=True)
-        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=5)
+        # 23 pixels is half a millimeter.
+        metashape_tools.remove_bad_markers(chunk, marker_error_threshold=23)
         # Remove cameras with unreasonable estimated pitch values.
         metashape_tools.remove_bad_cameras(chunk, pitch_error_threshold=40)
         metashape_tools.optimize_cameras(chunk, fixed_sensors=False)
