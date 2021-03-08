@@ -1,4 +1,5 @@
 """Constant parameters that are used throughout the module."""
+from __future__ import annotations
 
 from datetime import datetime
 

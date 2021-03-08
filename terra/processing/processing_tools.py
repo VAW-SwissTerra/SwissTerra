@@ -444,6 +444,12 @@ def coalign_dems(path_combination: tuple[str, str], progress_bar: Optional[tqdm]
             continue
         result[key] = result[key].replace("\n", " ")
 
+    try:
+        result["fitness"] / 2
+    except TypeError:
+        warnings.warn(f"ICP fitness was not numeric: \n{result}")
+        return None
+
     output = {"icp": result, "bias": bias, "overlap": np.count_nonzero(overlap_mask)}
     temp_dir.cleanup()
     if progress_bar is not None:

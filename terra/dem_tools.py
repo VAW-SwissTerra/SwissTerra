@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import warnings
 from typing import Any, Optional
 
 import DemUtils as du
@@ -265,7 +266,12 @@ def coregister_dem(filepath: str, reference_path: Optional[str] = None, output_p
 
     # Calculate the bias between the two products before coregistration
     # ICP works better if this bias is first accounted for.
-    bias = np.nanmedian(cropped_reference_dem - dem_elevation)
+    with warnings.catch_warnings(record=True) as warning_catcher:
+        warnings.simplefilter("always")
+        bias = np.nanmedian(cropped_reference_dem - dem_elevation)
+
+        if len(warning_catcher) > 0 and "All-NaN" in str(warning_catcher[-1].message):
+            return None
 
     dem_elevation -= bias
 
@@ -381,6 +387,11 @@ def coregister_dem(filepath: str, reference_path: Optional[str] = None, output_p
         stats["icp"][stat] = stats["icp"][stat].replace("\n", " ")
     # with open(os.path.join(CACHE_FILES["dem_coreg_meta_dir"], f"{station_name}_coregistration.json"), "w") as outfile:
     #    json.dump(stats, outfile)
+
+    try:
+        stats["icp"]["fitness"] > 0
+    except TypeError:
+        raise ValueError(f"ICP fitness was not numeric: {stats}")
 
     return stats
 

@@ -1195,10 +1195,13 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
             continue
 
         # Skip if the coalignment fitness was poor. I think e.g. 10 means 10 m of offset
-        if result["icp"]["fitness"] > max_fitness:
-            progress_bar.update()
-            print(f"{pair} fitness exceeded threshold: {result['icp']['fitness']}")
-            continue
+        try:
+            if result["icp"]["fitness"] > max_fitness:
+                progress_bar.update()
+                print(f"{pair} fitness exceeded threshold: {result['icp']['fitness']}")
+                continue
+        except TypeError as exception:
+            raise TypeError(f"{result}: {exception}")
 
         # Get the ICP centroid as a numpy array (x, y, z) and create tie points from it
         centroid = np.array([float(value) for value in result["icp"]["centroid"].split(" ", 3)])
