@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import rasterio as rio
 import sklearn.linear_model
+from tqdm import tqdm
 
 libc = ctypes.CDLL(None)
 c_stdout = ctypes.c_void_p.in_dll(libc, 'stdout')
@@ -114,9 +115,11 @@ def is_gpu_available() -> bool:
 
 def plot_progress():
 
-    ssh_commands = ["ssh", "vierzack07", "cat",
-                    "Projects/ETH/SwissTerra/temp/processing/progress.log", "|", "grep", "DEMs"]
-    text = subprocess.run(ssh_commands, check=True, stdout=subprocess.PIPE, encoding="utf-8").stdout
+    text = ""
+    for hostname in tqdm(["localhost", "vierzack07", "vierzack04", "achtzack01"]):
+        ssh_commands = ["ssh", hostname, "cat",
+                        "Projects/ETH/SwissTerra/temp/processing/progress.log", "|", "grep", "DEMs"]
+        text += subprocess.run(ssh_commands, check=True, stdout=subprocess.PIPE, encoding="utf-8").stdout
 
     data = pd.DataFrame(columns=["date", "dataset", "dems"])
 
@@ -126,27 +129,25 @@ def plot_progress():
         dems = int(text.replace("Made ", "").replace(" DEMs", ""))
         data.loc[i] = date, dataset, dems
 
+    data.sort_values("date", inplace=True)
+
     data["dems_tot"] = data["dems"].cumsum()
     data["seconds"] = data["date"].apply(lambda x: float(datetime.datetime.strftime(x, "%s")))
 
-    christmas = datetime.datetime(year=2020, month=12, day=25, tzinfo=datetime.timezone.utc)
-
-    after_christmas = data.loc[data["date"] > christmas]  # type: ignore
-
     model = sklearn.linear_model.LinearRegression()
-    model.fit(after_christmas["seconds"].values.reshape(-1, 1), after_christmas["dems_tot"])
+    model.fit(data["seconds"].values.reshape(-1, 1), data["dems_tot"])
 
     april = datetime.datetime(year=2021, month=4, day=1, tzinfo=datetime.timezone.utc)
     dems_april = model.predict(np.reshape(float(datetime.datetime.strftime(april, "%s")), (1, -1)))[0]
 
     plt.figure(figsize=(6, 4))
-    plt.plot([data.loc[data["date"] > christmas].iloc[0]["date"], april],
-             [data.loc[data["date"] > christmas].iloc[0]["dems_tot"], dems_april],
+    plt.plot([data.iloc[0]["date"], april],
+             [data.iloc[0]["dems_tot"], dems_april],
              label="Projection",
              linestyle=":")
     plt.plot(data["date"], data["dems_tot"], linewidth=3, label="Progress")
 
-    plt.xlim(datetime.datetime(2020, 12, 19), datetime.datetime(2021, 3, 20))
+    #plt.xlim(datetime.datetime(2020, 12, 19), datetime.datetime(2021, 3, 20))
     plt.ylim(0, 2400)
 
     plt.hlines(2300, *plt.gca().get_xlim(), color="black", linestyles="--", label="Target")
