@@ -47,10 +47,11 @@ def run_processing_pipeline(dataset: str, redo: bool = False) -> None:
     try:
         chunk = metashape_tools.load_or_remake_chunk(doc, dataset)
     except Exception as exception:
-        # This error comes up if no chunks were successfully aligned.
-        if "Empty chunk list" in str(exception) or "No aligned cameras" in str(exception):
-            log(dataset, "Alignment not possible")
-            return
+        # One of these errors come up if no chunks were successfully aligned.
+        for error in ["Empty chunk list", "No aligned cameras", "Not enough cameras"]:
+            if error in str(exception):
+                log(dataset, "Alignment not possible")
+                return
         raise exception
     log(dataset, "Dataset is aligned")
 
