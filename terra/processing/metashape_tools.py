@@ -1176,7 +1176,7 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
 
     # Coaling all DEM combinations
     # The results variable is a list of all resultant transforms.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         results = list(executor.map(register_dem, pairs_with_dem))
 
     progress_bar.close()
