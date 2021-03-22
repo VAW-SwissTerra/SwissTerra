@@ -179,5 +179,8 @@ def process_dataset(dataset: str, redo: bool = False):
             return
         raise exception
     except Exception as exception:
+        if "No aligned cameras" in str(exception):  # Just go on if the exception was due to a failed alignment.
+            log(dataset, "Alignment not possible")
+            return
         log(dataset, "Processing failed")
         raise exception
