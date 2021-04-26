@@ -379,8 +379,14 @@ def coalign_dems(path_combination: tuple[str, str], progress_bar: Optional[tqdm]
     shutil.copy(path_1, temp_path_1)
     shutil.copy(path_2, temp_path_2)
 
+    crs = rio.crs.CRS.from_string(CONSTANTS.crs_epsg.replace("::", ":"))
     dem1 = gu.georaster.Raster(temp_path_1)
-    dem2 = gu.georaster.Raster(temp_path_2).reproject(dem1)
+    dem1.crs = crs
+
+    # For some reason, geoutils can't parse this automatically.
+    dem2_interim = gu.georaster.Raster(temp_path_2)
+    dem2_interim.crs = crs
+    dem2 = dem2_interim.reproject(dst_bounds=dem1.bounds, dst_crs=crs, dst_res=dem1.res)
 
     elev1 = np.ma.masked_array(dem1.data, mask=dem1.data < -1000).squeeze()
     elev2 = np.ma.masked_array(dem2.data, mask=dem2.data < -1000).squeeze()
@@ -454,6 +460,10 @@ def coalign_dems(path_combination: tuple[str, str], progress_bar: Optional[tqdm]
     temp_dir.cleanup()
     if progress_bar is not None:
         progress_bar.update()
+
+    # Close the rio datasets. (should be fixed in GeoUtils)
+    dem1.ds.close()
+    dem2_interim.ds.close()
     return output
 
 

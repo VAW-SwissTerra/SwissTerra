@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 import warnings
+import shutil
 from typing import Any, Optional
 
 import DemUtils as du
@@ -234,7 +235,7 @@ def coregister_dem(filepath: str, reference_path: Optional[str] = None, output_p
     bounds = dict(zip(["west", "south", "east", "north"], list(dem.bounds)))
 
     # If reference_path is None, load the base_dem as the reference elevation
-    if reference_path is not None:
+    if reference_path is None:
         cropped_reference_dem = load_reference_elevation(bounds)
         dem_elevation = dem.read(1)
     # If the reference_path exists, load it instead and modify the variables accordingly.
@@ -311,6 +312,13 @@ def coregister_dem(filepath: str, reference_path: Optional[str] = None, output_p
     #    pixel_buffer=5,
     #    temp_dir=temp_dir.name
     # )
+    for path in [temp_dem_path, temp_ref_path]:
+        subprocess.run([
+            "gdal_edit.py",
+            "-a_srs", CONSTANTS.crs_epsg.replace("::", ":"),
+            temp_dem_path,
+        ], check=True)
+
     stats: dict[str, Any] = {}
     output_dem, _ = du.coreg.coregister(
         reference_raster=temp_ref_path,
@@ -578,7 +586,8 @@ def merge_rasters(raster_filepaths: list[str], output_filepath: str = CACHE_FILE
             crs=rio.open(raster_filepaths[0]).crs,
             transform=transform,
             dtype=dtype,
-            nodata=nodata_value
+            nodata=nodata_value,
+            compression="deflate"
     ) as raster:
         raster.write(merged_raster.astype(dtype), 1)
 

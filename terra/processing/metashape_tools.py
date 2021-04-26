@@ -967,13 +967,27 @@ def coalign_stereo_pairs(chunk: ms.Chunk, pairs: list[str], max_fitness: float =
     # Coaling all DEM combinations
     # The results variable is a list of transforms from pair1 to pair2
     #results: list[Optional[dict[str, Any]]] = []
-    progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        results = list(executor.map(lambda paths: processing_tools.coalign_dems(paths, progress_bar=progress_bar),
-                                    path_combinations))
+    #progress_bar = tqdm(total=len(path_combinations), desc="Coaligning DEM pairs")
+    # with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    #    results = list(executor.map(lambda paths: processing_tools.coalign_dems(paths, progress_bar=progress_bar),
+    #                                path_combinations))
 
-    progress_bar.close()
-    print(results)
+    # progress_bar.close()
+
+    # Run the coalignment and save the results on disk (to avoid OOM errors)
+    temp_dir = tempfile.TemporaryDirectory()
+    for path_combination in tqdm(path_combinations, desc="Coaligning DEM pairs"):
+        result = processing_tools.coalign_dems(path_combination)
+        with open(os.path.join(temp_dir.name, str(hash("_".join(path_combination)))), "wb") as outfile:
+            pickle.dump(result, outfile)
+
+        del result  # Make sure the result is discarded (after saving to disk)
+
+    # Read the results from disk.
+    results = []
+    for path_combination in path_combinations:
+        with open(os.path.join(temp_dir.name, str(hash("_".join(path_combination)))), "rb") as infile:
+            results.append(pickle.load(infile))
 
     # Run through each combination of stereo-pairs and try to coalign the DEMs
     progress_bar = tqdm(total=len(pair_combinations))
@@ -1176,7 +1190,7 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
 
     # Coaling all DEM combinations
     # The results variable is a list of all resultant transforms.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         results = list(executor.map(register_dem, pairs_with_dem))
 
     progress_bar.close()

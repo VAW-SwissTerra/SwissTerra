@@ -156,6 +156,8 @@ def plot_progress():
     plt.xticks(rotation=45)
     plt.tight_layout()
 
+    print(f"Total DEMs: {data['dems_tot'].max()}")
+
     plt.savefig("temp/figures/dem_generation_progress.jpg", dpi=300)
 
 
