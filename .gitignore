@@ -13,3 +13,5 @@ export/
 temp.py
 temp
 history.log
+md5sums.csv
+terra_results.tar.gz
