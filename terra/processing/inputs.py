@@ -34,7 +34,7 @@ def get_dataset_names() -> list[str]:
     return sorted_datasets
 
 
-DATASETS = get_dataset_names() + ["full"]
+DATASETS = get_dataset_names() + ["full", "failed_pairs"]
 
 for _dataset in DATASETS:
     CACHE_FILES[f"{_dataset}_dir"] = os.path.join(TEMP_DIRECTORY, _dataset)

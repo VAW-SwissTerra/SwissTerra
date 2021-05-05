@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import itertools
+import json
 import os
 import pickle
 import shutil
@@ -11,6 +12,7 @@ import warnings
 from enum import Enum
 from typing import Any, Optional
 
+import camelot
 import Metashape as ms
 import numpy as np
 import pandas as pd
@@ -18,7 +20,7 @@ from tqdm import tqdm
 
 from terra import dem_tools, files
 from terra.constants import CONSTANTS
-from terra.preprocessing import fiducials, masks
+from terra.preprocessing import fiducials, image_meta, masks
 from terra.processing import inputs, processing_tools
 from terra.utilities import is_gpu_available, no_stdout
 
@@ -305,7 +307,7 @@ def align_cameras(chunk: ms.Chunk, fixed_sensor: bool = False) -> bool:
 
     with no_stdout():
         chunk.matchPhotos(reference_preselection=True, filter_mask=True)
-        chunk.alignCameras()
+        chunk.alignCameras(reset_alignment=True)
 
         # Check if no cameras were aligned (if all transforms are None)
         if all([camera.transform is None for camera in chunk.cameras]):
@@ -728,7 +730,7 @@ def build_dense_clouds(doc: ms.Document, chunk: ms.Chunk, pairs: list[str], qual
         return True
 
     if all_together:
-        print("Generating dense cloud from all stereo-pairs")
+        #print("Generating dense cloud from all stereo-pairs")
         generate_dense_cloud(chunk.cameras, label="all_pairs")
         successful_pairs = pairs
 
@@ -771,11 +773,14 @@ def build_dems(chunk: ms.Chunk, pairs: list[str], redo: bool = False,
     """
     assert chunk.meta["dataset"] is not None
 
+    # For the failed stereo-pairs, this will always be 1, so tqdm is not needed here.
+    no_tqdm = len(pairs) == 1
+
     filepaths: dict[str, str] = {}
 
     dense_clouds = [cloud for cloud in chunk.dense_clouds if cloud.label in pairs]
 
-    for cloud in tqdm(dense_clouds, desc="Exporting dense clouds"):
+    for cloud in tqdm(dense_clouds, desc="Exporting dense clouds", disable=no_tqdm):
         if not cloud.label in pairs:
             continue
         cloud_filepath = os.path.join(
@@ -791,7 +796,7 @@ def build_dems(chunk: ms.Chunk, pairs: list[str], redo: bool = False,
 
     chunk.dense_cloud = None
 
-    progress_bar = tqdm(total=len(filepaths), desc="Generating DEMs")
+    progress_bar = tqdm(total=len(filepaths), desc="Generating DEMs", disable=no_tqdm)
 
     def build_dem(pair_and_filepath: tuple[str, str]) -> tuple[str, str]:
         """
@@ -849,7 +854,7 @@ def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> 
     # Make a list of all of the stereo-pairs that successfully got orthomosaics
     successful_pairs: list[str] = []
 
-    progress_bar = tqdm(total=len(pairs))
+    progress_bar = tqdm(total=len(pairs), disable=(len(pairs) == 1))
     for pair in pairs:
         progress_bar.desc = f"Generating orthomosaic for {pair}"
         # Set all cameras of the stereo-pair to be enabled and disable all others.
@@ -869,7 +874,8 @@ def build_orthomosaics(chunk: ms.Chunk, pairs: list[str], resolution: float) -> 
 
         try:
             with no_stdout():
-                chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData, resolution=resolution)
+                chunk.buildOrthomosaic(surface_data=ms.DataSource.ElevationData,
+                                       resolution=resolution, projection=chunk.elevation.projection)
         except Exception as exception:
             if "Zero resolution" in str(exception):
                 print(f"Pair {pair} orthomosaic got zero resolution")
@@ -911,7 +917,7 @@ def export_orthomosaics(chunk: ms.Chunk, pairs: list[str], directory: str, overw
     compression_type.tiff_compression = ms.ImageCompression.TiffCompressionJPEG
     compression_type.jpeg_quality = 90
 
-    progress_bar = tqdm(total=len(pairs))
+    progress_bar = tqdm(total=len(pairs), disable=(len(pairs) == 1))
     for pair in pairs:
         progress_bar.desc = f"Exporting orthomosaic for {pair}"
         output_filepath = os.path.join(directory, f"{pair}_orthomosaic.tif")
@@ -1366,3 +1372,273 @@ def stable_ground_registration(chunk: ms.Chunk, pairs: list[str], max_fitness: f
         progress_bar.update()
 
     progress_bar.close()
+
+
+def copy_chunk(chunk: ms.Chunk, new_label: str, camera_subset: Optional[list[str]] = None, retain_tiepoints: bool = True) -> ms.Chunk:
+
+    items_to_copy = []
+    if retain_tiepoints:
+        items_to_copy.append(ms.DataSource.PointCloudData)
+    with no_stdout():
+        copied_chunk = chunk.copy(items=items_to_copy)
+
+    copied_chunk.label = new_label
+
+    if camera_subset is not None:
+        for camera in copied_chunk.cameras:
+            if camera.label not in camera_subset:
+                with no_stdout():
+                    copied_chunk.remove(camera)
+
+    return copied_chunk
+
+
+def get_aligned_cameras():
+
+    processing_dir = inputs.TEMP_DIRECTORY
+    processed_datasets = [fp for fp in os.listdir(processing_dir) if (
+        ("Wild" in fp) or ("Zeiss" in fp) or ("failed_pairs" in fp))]
+
+    aligned_cameras: list[str] = []
+
+    for dataset in tqdm(processed_datasets, desc="Finding aligned cameras in datasets"):
+        ms_path = os.path.join(processing_dir, dataset, f"{dataset}.psx")
+
+        doc = ms.Document()
+        with no_stdout():
+            doc.open(ms_path, read_only=True)
+
+        for chunk in doc.chunks:
+            for camera in chunk.cameras:
+                if camera.transform is None:
+                    continue
+                aligned_cameras.append(camera.label + ".tif")
+
+    return aligned_cameras
+
+
+def get_unfinished_stereo_pairs() -> dict[str, dict[str, Any]]:
+    img_meta = image_meta.read_metadata()
+
+    aligned_cameras = get_aligned_cameras()
+
+    unprocessed_cam_meta = img_meta.loc[~img_meta["Image file"].isin(aligned_cameras)]
+    images = {}
+
+    for number, data in unprocessed_cam_meta.groupby("Base number"):
+        station_name = "station_" + number
+        dataset = data["Instrument"].iloc[0] + "_" + str(data["date"].iloc[0].year)
+
+        filenames = data["Image file"].values
+
+        focal_lengths = np.unique(data["focal_length"])
+        sensor_names = dict(zip(
+            filenames,
+            [dataset + "_" + fl + "mm" for fl in data["focal_length"].astype(int).astype(str)]
+        ))
+
+        images[station_name] = {"dataset": dataset, "filenames": filenames, "sensor_names": sensor_names}
+
+    return images
+
+
+def validate_image_filepaths(doc: ms.Document):
+    """Check that all image filepaths are valid, and try to fix them if not."""
+    for chunk in doc.chunks:
+        for camera in chunk.cameras:
+            if os.path.isfile(camera.photo.path):
+                continue
+            basename = os.path.basename(camera.photo.path)
+
+            camera.photo.path = os.path.join(files.INPUT_DIRECTORIES["image_dir"], basename)
+
+            assert os.path.isfile(camera.photo.path)
+
+
+def get_sensor_parameters(doc: ms.Document) -> dict[str, Any]:
+
+    dataset = os.path.splitext(os.path.basename(doc.path))[0]
+    instrument = dataset.split("_")[0]
+
+    sensors = {}
+    for chunk in doc.chunks:
+        if "Merged" not in chunk.label:
+            continue
+        n_cameras: dict[str, int] = {}
+        for camera in chunk.cameras:
+            n_cameras[camera.sensor.label] = (n_cameras.get(camera.sensor.label) or 0) + 1
+
+        for sensor in chunk.sensors:
+            if "unknown" in sensor.label:
+                continue
+
+            params = sensor.calibration.covariance_params
+
+            cov = np.reshape(sensor.calibration.covariance_matrix, (len(params), ) * 2)
+            error = [np.sqrt(cov[i, i]) for i in range(len(params))]
+
+            new_label = sensor.label.replace(instrument, dataset)
+
+            sensors[new_label] = {
+                "estimated": dict(zip(params, [getattr(sensor.calibration, param.lower()) for param in params])),
+                "error": dict(zip(params, error)),
+                "covariance": cov.tolist(),
+                "n_cameras": n_cameras[sensor.label],
+                "pixel_height_mm": sensor.pixel_height,
+                "pixel_width_mm": sensor.pixel_width,
+            }
+    return sensors
+
+
+def get_camera_parameters(doc: ms.Document, other_sensors=None, verbose=False) -> dict[str, Any]:
+
+    dataset = os.path.splitext(os.path.basename(doc.path))[0]
+
+    instrument = dataset.split("_")[0] if dataset != "failed_pairs" else "hdkjhakwjdhkaw"
+
+    cameras: dict[str, Any] = {}
+
+    for chunk in tqdm(doc.chunks, desc="Iterating over chunks.", disable=(not verbose)):
+        if chunk.point_cloud is not None and chunk.point_cloud.points is not None:
+            point_ids = [-1] * len(chunk.point_cloud.tracks)
+            for point_id in range(0, len(chunk.point_cloud.points)):
+                point_ids[chunk.point_cloud.points[point_id].track_id] = point_id
+        else:
+            point_ids = None
+
+        fids = {fid.label: fid for fid in chunk.markers if fid.type == ms.Marker.Type.Fiducial}
+
+        for camera in chunk.cameras:
+            filename = camera.label + ".tif"
+
+            sensor_label = camera.sensor.label.replace(instrument, dataset)
+            # If other sensors were given, try to match the current sensor with an already established one.
+            # This is because the failed_pairs project got camera calibrations from the well-processed chunks.
+            # However, if no well constrained model existed, it took the closest one from the same instrument.
+            # The "closest" one was not consistent, so I don't know which one that is. Thus we have to figure that out.
+            if dataset == "failed_pairs" and other_sensors is not None:
+                sensor_dataset = camera.sensor.label.split("_")[0]
+                # Loop over all the sensor labels
+                for label in other_sensors:
+                    # If The first part of the dataset name is not in the label,
+                    # (e.g. "Wild14" not in "Wild13_1935_237mm") skip it.
+                    if sensor_dataset not in label:
+                        continue
+                    try:
+                        other_f = other_sensors[label]["estimated"]["F"]
+                    except KeyError:  # I have no idea why this happens, but a fix seems to be to just skip it.
+                        continue
+                    # Check if the fixed calibration's focal length is within 0.001 mm of the sensor's focal length.
+                    if abs(camera.sensor.user_calib.f - other_f) < 1e-3:
+                        # If so, this is most likely the correct sensor label and we can stop looking.
+                        sensor_label = label
+                        break
+
+            reference_rotation = {
+                "ypr": dict(zip(["yaw", "pitch", "roll"], ms.utils.mat2ypr(ms.utils.opk2mat(camera.reference.rotation)))),
+                "opk": dict(zip(["omega", "phi", "kappa"], camera.reference.rotation))
+            }
+
+            estimated_ypr = (None,) * 3
+            estimated_opk = (None,) * 3
+            estimated_location = (None,) * 3
+            matrix = None
+            reprojection_error = None
+
+            fiducials = {}
+            for fid in fids:
+                projection = fids[fid].projections[camera]
+                label = fid.split("_")[-1]
+
+                fiducials[label] = {
+                    "location_mm": dict(zip(["x", "y"], fids[fid].reference.location)),
+                    "location_px": dict(zip(["x", "y"], projection.coord))
+                }
+
+            if camera.transform is not None:
+                estimated_location = chunk.crs.project(chunk.transform.matrix.mulp(camera.center))
+                matrix = np.reshape(camera.transform, (4, 4)).tolist()
+                # The lower monstrosity is adapted from: https://www.agisoft.com/forum/index.php?topic=6340.0
+                T = chunk.transform.matrix
+                # transformation matrix to the LSE coordinates in the given point
+                m = chunk.crs.localframe(T.mulp(camera.center))
+                R = m * T * camera.transform * ms.Matrix().Diag([1, -1, -1, 1])
+
+                row = list()
+                for j in range(0, 3):  # creating normalized rotation matrix 3x3
+                    row.append(R.row(j))
+                    row[j].size = 3
+                    row[j].normalize()
+                R = ms.Matrix([row[0], row[1], row[2]])
+
+                estimated_ypr = ms.utils.mat2ypr(R)
+                estimated_opk = ms.utils.mat2opk(R)
+
+                errors = []
+                for proj in chunk.point_cloud.projections[camera]:
+                    track_id = proj.track_id
+                    point_id = point_ids[track_id]
+                    if point_id < 0:
+                        continue
+                    point = chunk.point_cloud.points[point_id]
+                    if not point.valid:
+                        continue
+                    error = camera.error(point.coord, proj.coord).norm()
+                    errors.append(error)
+
+                if len(errors) > 0:
+                    errors = np.array(errors)
+                    errors = errors[np.isfinite(errors)]
+
+                    reprojection_error = np.sqrt(np.mean(np.square(errors)))
+
+            estimated_rotation = {
+                "ypr": dict(zip(["yaw", "pitch", "roll"], estimated_ypr)),
+                "opk": dict(zip(["omega", "phi", "kappa"], estimated_opk))
+            }
+
+            cameras[filename] = {
+                "aligned": camera.transform is not None,
+                "reference_location": dict(zip(["easting", "northing", "altitude"], camera.reference.location)),
+                "reference_rotation": reference_rotation,
+                "sensor": sensor_label,
+                "transform": matrix,
+                "estimated_location": dict(zip(["easting", "northing", "altitude"], estimated_location)),
+                "estimated_rotation": estimated_rotation,
+                "fiducials": fiducials,
+                "reprojection_error_px": reprojection_error,
+                "station": camera.group.label,
+                "stereo_pair": camera.group.label.replace("_R", "").replace("_L", "")
+            }
+
+    return cameras
+
+
+def export_all_project_data():
+
+    datasets = [d for d in os.listdir(inputs.TEMP_DIRECTORY) if ("Zeiss" in d) or ("Wild" in d)]
+
+    sensors: dict[str, Any] = {}
+    cameras: dict[str, Any] = {}
+    for dataset in tqdm(datasets, desc="Reading documents"):
+        doc = load_document(dataset)
+
+        sensors.update(get_sensor_parameters(doc))
+
+        cameras.update(get_camera_parameters(doc))
+
+    print("Loading the reprocessed chunks.")
+    doc = load_document("failed_pairs")
+    params = get_camera_parameters(doc, other_sensors=sensors, verbose=True)
+    for key, values in params.items():
+        # Skip if the camera is aligned in the original processing but isn't in the reprocessing
+        if key in cameras and cameras[key]["aligned"] and not cameras[key]["aligned"]:
+            continue
+
+        cameras[key] = values
+
+    with open(os.path.join(files.TEMP_DIRECTORY, "metadata", "photogrammetry_camera_metadata.json"), "w") as outfile:
+        json.dump(cameras, outfile)
+
+    with open(os.path.join(files.TEMP_DIRECTORY, "metadata", "photogrammetry_sensor_metadata.json"), "w") as outfile:
+        json.dump(sensors, outfile)

@@ -11,6 +11,7 @@ import warnings
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import matplotlib.widgets
+import Metashape as ms
 import numpy as np
 import pandas as pd
 import pytransform3d
@@ -23,9 +24,9 @@ import sklearn.pipeline
 import sklearn.utils
 from tqdm import tqdm
 
-from terra import base_dem, dem_tools, files
+from terra import base_dem, dem_tools, files, utilities
 from terra.constants import CONSTANTS
-from terra.preprocessing import outlines
+from terra.preprocessing import image_meta, outlines
 from terra.processing import inputs
 
 TEMP_DIRECTORY = os.path.join(files.TEMP_DIRECTORY, "evaluation")
@@ -729,5 +730,3 @@ if __name__ == "__main__":
     temp_hypso()
     # plot_regional_mb_gradient()
     # plot_normalized_mb_gradient()
-
-    # plot_periglacial_error(show=True)
