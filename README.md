@@ -70,3 +70,7 @@ TODO: Make a CLI entry point for the script below.
 
 6. `python terra/evaluation.py`: Generate dDEMs and analyse the result.
 
+
+## Credit
+The work was performed at [@VAW_glaciology](https://twitter.com/VAW_glaciology) in the frame of the work presented in Mannerfelt et al., ([2022; in discussion](https://doi.org/10.5194/tc-2022-14)).
+It was co-financed by the Swiss Federal Office of Meteorology and Climatology ([MeteoSwiss](https://www.meteoswiss.admin.ch/)) in the frame of [GCOS Swizerland](https://www.meteoswiss.admin.ch/home/research-and-cooperation/international-cooperation/gcos/gcos-switzerland-projects.html).
