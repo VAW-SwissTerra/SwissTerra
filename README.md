@@ -1,4 +1,4 @@
-# terra — SwissTerra archival image processing
+# SwissTerra — SwissTerra archival image processing
 
 The code was developed as part of a project funded by MeteoSwiss in the framework of the [Global Climate Observing System (GCOS) Switzerland](https://www.meteoswiss.admin.ch/home/research-and-cooperation/international-cooperation/gcos.html).
 
